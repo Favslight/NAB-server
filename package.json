@@ -1,0 +1,56 @@
+{
+  "name": "nab-server",
+  "version": "1.0.0",
+  "description": "Nigerian AI Builders (NAB) - Fastify + TypeScript Backend",
+  "main": "dist/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "echo 'Using raw SQL - see schema.sql'",
+    "db:migrate": "echo 'Run schema.sql in PostgreSQL'"
+  },
+  "keywords": [
+    "fastify",
+    "typescript",
+    "postgresql",
+    "pg",
+    "paystack",
+    "nigeria",
+    "ai",
+    "builders"
+  ],
+  "author": "AIBUILDERS.NG",
+  "license": "MIT",
+  "dependencies": {
+    "pg": "^8.11.3",
+    "@fastify/cors": "^9.0.1",
+    "@fastify/helmet": "^11.1.1",
+    "@fastify/jwt": "^8.0.0",
+    "@fastify/multipart": "^8.0.0",
+    "@fastify/rate-limit": "^9.1.0",
+    "bcrypt": "^5.1.1",
+    "cloudinary": "^1.41.0",
+    "dotenv": "^16.3.1",
+    "fastify": "^4.25.0",
+    "fastify-plugin": "^4.5.1",
+    "resend": "^2.0.0",
+    "zod": "^3.22.4",
+    "zod-to-json-schema": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.0",
+    "@types/bcrypt": "^5.0.2",
+    "@types/node": "^20.10.0",
+    "@typescript-eslint/eslint-plugin": "^6.14.0",
+    "@typescript-eslint/parser": "^6.14.0",
+    "eslint": "^8.55.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
