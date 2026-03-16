@@ -4,6 +4,7 @@ import { query, queryOne } from '../../database/database';
 import { authenticateToken, optionalAuth, requireAuth, requireMember } from '../../middlewares/auth';
 import { validateBody, validateQuery } from '../../middlewares/validation';
 import { successResponse, errorResponse, paginatedResponse } from '../../utils/response';
+import { uploadImage, uploadVideo } from '../../utils/cloudinary';
 import { slugify } from '../../utils/helpers';
 
 const createPostSchema = z.object({
@@ -217,6 +218,42 @@ export default async function communityRoutes(fastify: FastifyInstance) {
     } catch (error: any) {
       request.log.error(error);
       return reply.status(500).send(errorResponse('Failed to react', error.message));
+    }
+  });
+
+  // POST /api/community/upload - Upload media for posts
+  fastify.post('/upload', { preHandler: [authenticateToken, requireMember] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const userId = request.user!.userId;
+
+      // Get file from multipart request
+      const file = await request.file();
+      if (!file) {
+        return reply.status(400).send(errorResponse('No file provided'));
+      }
+
+      const buffer = await file.toBuffer();
+      const isVideo = file.mimetype.startsWith('video/');
+      const isImage = file.mimetype.startsWith('image/');
+
+      if (!isVideo && !isImage) {
+        return reply.status(400).send(errorResponse('Only image and video files are allowed'));
+      }
+
+      // Upload to Cloudinary
+      const uploadResult = isVideo 
+        ? await uploadVideo(buffer, 'community')
+        : await uploadImage(buffer, 'community');
+
+      return reply.status(200).send(successResponse({
+        url: uploadResult.url,
+        publicId: uploadResult.publicId,
+        resourceType: isVideo ? 'video' : 'image',
+      }, 'File uploaded successfully'));
+
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.status(500).send(errorResponse('Failed to upload file', error.message));
     }
   });
 }

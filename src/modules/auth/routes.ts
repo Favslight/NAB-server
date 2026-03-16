@@ -1,13 +1,13 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { query, queryOne } from '../../database/database';
-import { User, JWTPayload } from '../../database/types';
+import { User } from '../../database/types';
 import { hashPassword, comparePassword } from '../../utils/password';
 import { generateReferralCode, generateIdNo, generateEmailVerificationToken } from '../../utils/helpers';
 import { successResponse, errorResponse } from '../../utils/response';
 import { validateBody } from '../../middlewares/validation';
 import { authenticateToken } from '../../middlewares/auth';
-import { config } from '../../config';
+import { isMembershipFeeEnabled, isGuestLoginEnabled } from '../../utils/settings';
 
 // Schemas
 const registerSchema = z.object({
@@ -100,6 +100,13 @@ export default async function authRoutes(fastify: FastifyInstance) {
 
       const isFirstInState = (userCount?.count || 0) === 0;
 
+      // Check if membership fee is enabled
+      const feeEnabled = await isMembershipFeeEnabled();
+
+      // Determine role and status based on payment setting
+      const userRole = isFirstInState ? 'state_admin' : (feeEnabled ? 'guest' : 'member');
+      const userStatus = feeEnabled ? 'pending_verification' : 'membership_active';
+
       // Create user
       const newUser = await queryOne<User>(
         `INSERT INTO users (id_no, full_name, email, phone, password_hash, state_id, profession, role, status, referral_code, email_verification_token)
@@ -113,8 +120,8 @@ export default async function authRoutes(fastify: FastifyInstance) {
           passwordHash,
           data.state_id,
           data.profession || null,
-          isFirstInState ? 'state_admin' : 'guest',
-          'pending_verification',
+          userRole,
+          userStatus,
           referralCode,
           verificationToken,
         ]
@@ -132,6 +139,15 @@ export default async function authRoutes(fastify: FastifyInstance) {
         );
       }
 
+      // If membership is free, create membership record immediately
+      if (!feeEnabled && !isFirstInState) {
+        await query(
+          `INSERT INTO memberships (user_id, plan_type, amount_paid, status, starts_at, expires_at)
+           VALUES ($1, 'standard_member', 0, 'active', $2, $3)`,
+          [newUser.id, new Date().toISOString(), new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()]
+        );
+      }
+
       // Generate JWT
       const token = fastify.jwt.sign({
         userId: newUser.id,
@@ -139,6 +155,10 @@ export default async function authRoutes(fastify: FastifyInstance) {
         role: newUser.role,
         stateId: newUser.state_id,
       });
+
+      const message = feeEnabled 
+        ? 'Registration successful. Please verify your email and complete payment to become a member.'
+        : 'Registration successful. You are now a member! Please verify your email.';
 
       return reply.status(201).send(successResponse({
         user: {
@@ -151,7 +171,8 @@ export default async function authRoutes(fastify: FastifyInstance) {
           referral_code: newUser.referral_code,
         },
         token,
-      }, 'Registration successful. Please verify your email.'));
+        requiresPayment: feeEnabled && !isFirstInState,
+      }, message));
 
     } catch (error: any) {
       request.log.error(error);
@@ -247,7 +268,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
   // POST /api/auth/guest-login
   fastify.post('/guest-login', { preHandler: validateBody(guestLoginSchema) }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      if (!config.features.enableGuestLogin) {
+      if (!await isGuestLoginEnabled()) {
         return reply.status(403).send(errorResponse('Guest login is disabled'));
       }
 

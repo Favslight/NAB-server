@@ -1,9 +1,10 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { query, queryOne } from '../../database/database';
-import { authenticateToken, optionalAuth, requireMember } from '../../middlewares/auth';
+import { authenticateToken, optionalAuth, requireMember, requireStateAdmin } from '../../middlewares/auth';
 import { validateQuery } from '../../middlewares/validation';
 import { successResponse, paginatedResponse, errorResponse } from '../../utils/response';
+import { uploadImage, uploadVideo } from '../../utils/cloudinary';
 
 const paginationSchema = z.object({
   page: z.string().regex(/^\d+$/).transform(Number).default('1'),
@@ -179,6 +180,91 @@ export default async function trainingRoutes(fastify: FastifyInstance) {
     } catch (error: any) {
       request.log.error(error);
       return reply.status(500).send(errorResponse('Failed to fetch categories', error.message));
+    }
+  });
+
+  // POST /api/trainings/:id/lessons/:lessonId/video - Upload lesson video (admin only)
+  fastify.post('/:id/lessons/:lessonId/video', { preHandler: [authenticateToken, requireStateAdmin] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { id, lessonId } = request.params as { id: string; lessonId: string };
+
+      // Verify lesson exists
+      const lesson = await queryOne<{ id: string }>(
+        'SELECT id FROM training_lessons WHERE id = $1 AND training_id = $2',
+        [lessonId, id]
+      );
+
+      if (!lesson) {
+        return reply.status(404).send(errorResponse('Lesson not found'));
+      }
+
+      // Get file from multipart request
+      const file = await request.file();
+      if (!file) {
+        return reply.status(400).send(errorResponse('No video file provided'));
+      }
+
+      if (!file.mimetype.startsWith('video/')) {
+        return reply.status(400).send(errorResponse('Only video files are allowed'));
+      }
+
+      const buffer = await file.toBuffer();
+
+      // Upload to Cloudinary
+      const uploadResult = await uploadVideo(buffer, 'trainings');
+
+      // Update lesson with video URL
+      const updatedLesson = await queryOne(
+        'UPDATE training_lessons SET video_url = $1, updated_at = $2 WHERE id = $3 RETURNING *',
+        [uploadResult.url, new Date().toISOString(), lessonId]
+      );
+
+      return reply.status(200).send(successResponse(updatedLesson, 'Video uploaded successfully'));
+
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.status(500).send(errorResponse('Failed to upload video', error.message));
+    }
+  });
+
+  // POST /api/trainings/:id/thumbnail - Upload training thumbnail (admin only)
+  fastify.post('/:id/thumbnail', { preHandler: [authenticateToken, requireStateAdmin] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { id } = request.params as { id: string };
+
+      // Verify training exists
+      const training = await queryOne<{ id: string }>('SELECT id FROM trainings WHERE id = $1', [id]);
+
+      if (!training) {
+        return reply.status(404).send(errorResponse('Training not found'));
+      }
+
+      // Get file from multipart request
+      const file = await request.file();
+      if (!file) {
+        return reply.status(400).send(errorResponse('No image file provided'));
+      }
+
+      if (!file.mimetype.startsWith('image/')) {
+        return reply.status(400).send(errorResponse('Only image files are allowed'));
+      }
+
+      const buffer = await file.toBuffer();
+
+      // Upload to Cloudinary
+      const uploadResult = await uploadImage(buffer, 'trainings');
+
+      // Update training with thumbnail URL
+      const updatedTraining = await queryOne(
+        'UPDATE trainings SET thumbnail_url = $1, updated_at = $2 WHERE id = $3 RETURNING *',
+        [uploadResult.url, new Date().toISOString(), id]
+      );
+
+      return reply.status(200).send(successResponse(updatedTraining, 'Thumbnail uploaded successfully'));
+
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.status(500).send(errorResponse('Failed to upload thumbnail', error.message));
     }
   });
 }

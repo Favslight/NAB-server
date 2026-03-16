@@ -4,6 +4,7 @@ import { query, queryOne } from '../../database/database';
 import { authenticateToken, requireAuth, requireSuperAdmin } from '../../middlewares/auth';
 import { validateBody, validateQuery } from '../../middlewares/validation';
 import { successResponse, errorResponse, paginatedResponse } from '../../utils/response';
+import { uploadImage } from '../../utils/cloudinary';
 
 const updateProfileSchema = z.object({
   full_name: z.string().min(2).max(255).optional(),
@@ -155,6 +156,41 @@ export default async function userRoutes(fastify: FastifyInstance) {
     } catch (error: any) {
       request.log.error(error);
       return reply.status(500).send(errorResponse('Failed to update profile', error.message));
+    }
+  });
+
+  // POST /api/users/avatar - Upload avatar
+  fastify.post('/avatar', { preHandler: [authenticateToken, requireAuth] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const userId = request.user!.userId;
+
+      // Get file from multipart request
+      const file = await request.file();
+      if (!file) {
+        return reply.status(400).send(errorResponse('No file provided'));
+      }
+
+      // Only allow images
+      if (!file.mimetype.startsWith('image/')) {
+        return reply.status(400).send(errorResponse('Only image files are allowed'));
+      }
+
+      const buffer = await file.toBuffer();
+
+      // Upload to Cloudinary
+      const uploadResult = await uploadImage(buffer, 'avatars');
+
+      // Update user avatar
+      const user = await queryOne(
+        'UPDATE users SET avatar_url = $1, updated_at = $2 WHERE id = $3 RETURNING id, avatar_url',
+        [uploadResult.url, new Date().toISOString(), userId]
+      );
+
+      return reply.status(200).send(successResponse({ avatar_url: user?.avatar_url }, 'Avatar uploaded successfully'));
+
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.status(500).send(errorResponse('Failed to upload avatar', error.message));
     }
   });
 

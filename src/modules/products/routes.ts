@@ -1,19 +1,11 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import { v2 as cloudinary } from 'cloudinary';
 import { query, queryOne } from '../../database/database';
 import { authenticateToken, optionalAuth, requireMember, requireStateAdmin } from '../../middlewares/auth';
 import { validateBody, validateQuery } from '../../middlewares/validation';
 import { successResponse, paginatedResponse, errorResponse } from '../../utils/response';
+import { uploadImage, uploadVideo, deleteFile } from '../../utils/cloudinary';
 import { slugify } from '../../utils/helpers';
-import { config } from '../../config';
-
-// Configure Cloudinary
-cloudinary.config({
-  cloud_name: config.cloudinary.cloudName,
-  api_key: config.cloudinary.apiKey,
-  api_secret: config.cloudinary.apiSecret,
-});
 
 const createProductSchema = z.object({
   name: z.string().min(1).max(255),
@@ -222,6 +214,52 @@ export default async function productRoutes(fastify: FastifyInstance) {
     } catch (error: any) {
       request.log.error(error);
       return reply.status(500).send(errorResponse('Failed to update product', error.message));
+    }
+  });
+
+  // POST /api/products/:id/media - Upload product media
+  fastify.post('/:id/media', { preHandler: [authenticateToken, requireMember] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const userId = request.user!.userId;
+      const userRole = request.user!.role;
+
+      // Check ownership
+      const product = await queryOne<{ user_id: string }>('SELECT user_id FROM products WHERE id = $1', [id]);
+
+      if (!product) {
+        return reply.status(404).send(errorResponse('Product not found'));
+      }
+
+      if (product.user_id !== userId && !['state_admin', 'super_admin'].includes(userRole)) {
+        return reply.status(403).send(errorResponse('Not authorized to upload media to this product'));
+      }
+
+      // Get file from multipart request
+      const file = await request.file();
+      if (!file) {
+        return reply.status(400).send(errorResponse('No file provided'));
+      }
+
+      const buffer = await file.toBuffer();
+      const mediaType = file.mimetype.startsWith('video/') ? 'video' : 'image';
+
+      // Upload to Cloudinary
+      const uploadResult = mediaType === 'video' 
+        ? await uploadVideo(buffer, 'products')
+        : await uploadImage(buffer, 'products');
+
+      // Save to database
+      const media = await queryOne(
+        'INSERT INTO product_media (product_id, media_type, url) VALUES ($1, $2, $3) RETURNING *',
+        [id, mediaType, uploadResult.url]
+      );
+
+      return reply.status(201).send(successResponse(media, 'Media uploaded successfully'));
+
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.status(500).send(errorResponse('Failed to upload media', error.message));
     }
   });
 }
