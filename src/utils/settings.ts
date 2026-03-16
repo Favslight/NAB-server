@@ -16,7 +16,7 @@ export async function getSetting(key: string): Promise<string | null> {
  */
 export async function getBooleanSetting(key: string, defaultValue: boolean = false): Promise<boolean> {
   const value = await getSetting(key);
-  if (value === null) return defaultValue;
+  if (value === null || value === undefined) return defaultValue;
   return value.toLowerCase() === 'true';
 }
 
@@ -25,7 +25,7 @@ export async function getBooleanSetting(key: string, defaultValue: boolean = fal
  */
 export async function getNumberSetting(key: string, defaultValue: number = 0): Promise<number> {
   const value = await getSetting(key);
-  if (value === null) return defaultValue;
+  if (value === null || value === undefined) return defaultValue;
   const parsed = parseFloat(value);
   return isNaN(parsed) ? defaultValue : parsed;
 }
@@ -35,7 +35,7 @@ export async function getNumberSetting(key: string, defaultValue: number = 0): P
  */
 export async function getStringSetting(key: string, defaultValue: string = ''): Promise<string> {
   const value = await getSetting(key);
-  return value !== null ? value : defaultValue;
+  return value !== null && value !== undefined ? value : defaultValue;
 }
 
 // Common settings helpers
