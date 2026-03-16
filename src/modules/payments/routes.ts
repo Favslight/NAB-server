@@ -85,16 +85,16 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         }),
       });
 
-      const paystackData = await response.json();
+      const paystackData = await response.json() as { status: boolean; message?: string; data?: { authorization_url: string; access_code: string } };
 
-      if (!paystackData.status) {
+      if (!paystackData.status || !paystackData.data) {
         return reply.status(400).send(errorResponse('Failed to initialize payment', paystackData.message));
       }
 
       return reply.send(successResponse({
-        authorization_url: paystackData.data.authorization_url,
+        authorization_url: paystackData.data!.authorization_url,
         reference,
-        access_code: paystackData.data.access_code,
+        access_code: paystackData.data!.access_code,
       }, 'Payment initiated'));
 
     } catch (error: any) {
@@ -209,23 +209,23 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         },
       });
 
-      const verifyData = await response.json();
+      const verifyData = await response.json() as { status: boolean; data?: { status: string; amount: number; paid_at: string; channel: string } };
 
-      if (!verifyData.status) {
+      if (!verifyData.status || !verifyData.data) {
         return reply.status(400).send(errorResponse('Failed to verify payment'));
       }
 
       // Update local transaction
       await query(
         'UPDATE transactions SET status = $1, gateway_response_json = $2 WHERE reference = $3',
-        [verifyData.data.status, JSON.stringify(verifyData.data), reference]
+        [verifyData.data!.status, JSON.stringify(verifyData.data), reference]
       );
 
       return reply.send(successResponse({
-        status: verifyData.data.status,
-        amount: verifyData.data.amount / 100,
-        paid_at: verifyData.data.paid_at,
-        channel: verifyData.data.channel,
+        status: verifyData.data!.status,
+        amount: verifyData.data!.amount / 100,
+        paid_at: verifyData.data!.paid_at,
+        channel: verifyData.data!.channel,
       }));
 
     } catch (error: any) {

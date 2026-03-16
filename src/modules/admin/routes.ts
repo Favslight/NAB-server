@@ -5,6 +5,15 @@ import { authenticateToken, requireSuperAdmin, requireStateAdmin } from '../../m
 import { validateBody, validateQuery } from '../../middlewares/validation';
 import { successResponse, paginatedResponse, errorResponse } from '../../utils/response';
 
+// Helper to build state filter for state admins
+function getStateFilter(request: FastifyRequest): { clause: string; param: string | null } {
+  const isSuperAdmin = request.user!.role === 'super_admin';
+  if (isSuperAdmin) {
+    return { clause: '', param: null };
+  }
+  return { clause: ' AND state_id = $X', param: request.user!.stateId };
+}
+
 const paginationSchema = z.object({
   page: z.string().regex(/^\d+$/).transform(Number).default('1'),
   limit: z.string().regex(/^\d+$/).transform(Number).default('20'),
@@ -32,6 +41,13 @@ export default async function adminRoutes(fastify: FastifyInstance) {
   // GET /api/admin/dashboard - Admin dashboard stats
   fastify.get('/dashboard', { preHandler: [authenticateToken, requireStateAdmin] }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
+      const isSuperAdmin = request.user!.role === 'super_admin';
+      const stateId = request.user!.stateId;
+      
+      // Build state filter for state admins
+      const stateFilter = isSuperAdmin ? '' : "AND u.state_id = $1";
+      const stateParam = isSuperAdmin ? [] : [stateId];
+
       const [
         totalUsers,
         totalMembers,
@@ -40,12 +56,12 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         totalPosts,
         recentTransactions
       ] = await Promise.all([
-        queryOne<{ count: number }>('SELECT COUNT(*)::int as count FROM users'),
-        queryOne<{ count: number }>("SELECT COUNT(*)::int as count FROM users WHERE role = 'member'"),
-        queryOne<{ count: number }>("SELECT COUNT(*)::int as count FROM products WHERE status = 'pending_review'"),
-        queryOne<{ count: number }>("SELECT COUNT(*)::int as count FROM program_applications WHERE status = 'pending'"),
-        queryOne<{ count: number }>('SELECT COUNT(*)::int as count FROM community_posts'),
-        query<{ amount: number; status: string }>("SELECT amount, status FROM transactions WHERE status = 'success' ORDER BY created_at DESC LIMIT 100")
+        queryOne<{ count: number }>(`SELECT COUNT(*)::int as count FROM users u WHERE 1=1 ${stateFilter}`, stateParam),
+        queryOne<{ count: number }>(`SELECT COUNT(*)::int as count FROM users u WHERE role = 'member' ${stateFilter}`, stateParam),
+        queryOne<{ count: number }>(`SELECT COUNT(*)::int as count FROM products WHERE status = 'pending_review'`),
+        queryOne<{ count: number }>(`SELECT COUNT(*)::int as count FROM program_applications pa JOIN users u ON pa.user_id = u.id WHERE pa.status = 'pending' ${stateFilter.replace('u.', 'u.')}`),
+        queryOne<{ count: number }>(`SELECT COUNT(*)::int as count FROM community_posts`),
+        query<{ amount: number; status: string }>(`SELECT t.amount, t.status FROM transactions t JOIN users u ON t.user_id = u.id WHERE t.status = 'success' ${stateFilter} ORDER BY t.created_at DESC LIMIT 100`, stateParam)
       ]);
 
       const totalRevenue = (recentTransactions || []).reduce((sum, t) => sum + (t.amount || 0), 0);
@@ -66,6 +82,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           total: totalRevenue,
           recent_transactions: recentTransactions?.length || 0,
         },
+        isStateAdmin: !isSuperAdmin,
+        stateId: stateId,
       }));
 
     } catch (error: any) {
@@ -80,18 +98,27 @@ export default async function adminRoutes(fastify: FastifyInstance) {
   }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { page, limit } = request.query as any;
+      const isSuperAdmin = request.user!.role === 'super_admin';
+      const stateId = request.user!.stateId;
+
+      // Build state filter
+      const stateFilter = isSuperAdmin ? '' : 'WHERE u.state_id = $3';
+      const countFilter = isSuperAdmin ? '' : 'WHERE state_id = $1';
+      const params = isSuperAdmin ? [limit, (page - 1) * limit] : [limit, (page - 1) * limit, stateId];
+      const countParams = isSuperAdmin ? [] : [stateId];
 
       const users = await query(
         `SELECT u.*, s.name as state_name, m.status as membership_status, m.expires_at as membership_expires
          FROM users u
          LEFT JOIN states s ON u.state_id = s.id
          LEFT JOIN memberships m ON u.id = m.user_id AND m.status = 'active'
+         ${stateFilter}
          ORDER BY u.created_at DESC
          LIMIT $1 OFFSET $2`,
-        [limit, (page - 1) * limit]
+        params
       );
 
-      const countResult = await queryOne<{ count: number }>('SELECT COUNT(*)::int as count FROM users');
+      const countResult = await queryOne<{ count: number }>(`SELECT COUNT(*)::int as count FROM users ${countFilter}`, countParams);
 
       return reply.send(paginatedResponse(users || [], countResult?.count || 0, page, limit));
 
@@ -177,6 +204,16 @@ export default async function adminRoutes(fastify: FastifyInstance) {
   }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { page, limit } = request.query as any;
+      const isSuperAdmin = request.user!.role === 'super_admin';
+      const stateId = request.user!.stateId;
+
+      // Build state filter
+      const stateJoin = isSuperAdmin ? '' : 'JOIN users u ON pa.user_id = u.id';
+      const stateFilter = isSuperAdmin ? '' : 'AND u.state_id = $3';
+      const countJoin = isSuperAdmin ? '' : 'JOIN users u ON pa.user_id = u.id';
+      const countFilter = isSuperAdmin ? '' : 'AND u.state_id = $1';
+      const params = isSuperAdmin ? [limit, (page - 1) * limit] : [limit, (page - 1) * limit, stateId];
+      const countParams = isSuperAdmin ? [] : [stateId];
 
       const applications = await query(
         `SELECT pa.*, u.full_name as applicant_name, u.email as applicant_email, u.avatar_url as applicant_avatar,
@@ -184,14 +221,17 @@ export default async function adminRoutes(fastify: FastifyInstance) {
          FROM program_applications pa
          JOIN users u ON pa.user_id = u.id
          JOIN cohorts c ON pa.cohort_id = c.id
-         WHERE pa.status = 'pending'
+         WHERE pa.status = 'pending' ${stateFilter}
          ORDER BY pa.created_at ASC
          LIMIT $1 OFFSET $2`,
-        [limit, (page - 1) * limit]
+        params
       );
 
       const countResult = await queryOne<{ count: number }>(
-        "SELECT COUNT(*)::int as count FROM program_applications WHERE status = 'pending'"
+        `SELECT COUNT(*)::int as count FROM program_applications pa 
+         JOIN users u ON pa.user_id = u.id 
+         WHERE pa.status = 'pending' ${countFilter}`,
+        countParams
       );
 
       return reply.send(paginatedResponse(applications || [], countResult?.count || 0, page, limit));

@@ -1,13 +1,6 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { config } from '../config';
-import { JWTPayload, UserRole } from '../database/types';
-
-// Extend Fastify types
-declare module 'fastify' {
-  interface FastifyRequest {
-    user?: JWTPayload;
-  }
-}
+import { UserRole } from '../database/types';
 
 // JWT authentication middleware
 export async function authenticateToken(
@@ -27,7 +20,7 @@ export async function authenticateToken(
     const token = authHeader.substring(7);
     
     // Verify JWT using Fastify's JWT plugin
-    const decoded = await request.jwtVerify<JWTPayload>();
+    const decoded = await request.jwtVerify<{ userId: string; email: string; role: UserRole; stateId: string | null }>();
     request.user = decoded;
     
   } catch (error) {
@@ -91,7 +84,7 @@ export async function optionalAuth(
     const authHeader = request.headers.authorization;
     
     if (authHeader && authHeader.startsWith('Bearer ')) {
-      const decoded = await request.jwtVerify<JWTPayload>();
+      const decoded = await request.jwtVerify<{ userId: string; email: string; role: UserRole; stateId: string | null }>();
       request.user = decoded;
     }
   } catch (error) {

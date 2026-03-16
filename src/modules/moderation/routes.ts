@@ -16,6 +16,27 @@ export default async function moderationRoutes(fastify: FastifyInstance) {
       const { id } = request.params as { id: string };
       const { action, reason } = request.body as z.infer<typeof moderationActionSchema>;
       const moderatorId = request.user!.userId;
+      const isSuperAdmin = request.user!.role === 'super_admin';
+      const stateId = request.user!.stateId;
+
+      // For state admins, verify the post author is from their state
+      if (!isSuperAdmin) {
+        const post = await queryOne<{ author_state_id: string }>(
+          `SELECT u.state_id as author_state_id 
+           FROM community_posts cp 
+           JOIN users u ON cp.author_user_id = u.id 
+           WHERE cp.id = $1`,
+          [id]
+        );
+        
+        if (!post) {
+          return reply.status(404).send(errorResponse('Post not found'));
+        }
+        
+        if (post.author_state_id !== stateId) {
+          return reply.status(403).send(errorResponse('You can only moderate posts from your state'));
+        }
+      }
 
       const updates: Record<string, any> = {};
 
@@ -62,6 +83,27 @@ export default async function moderationRoutes(fastify: FastifyInstance) {
     try {
       const { id } = request.params as { id: string };
       const moderatorId = request.user!.userId;
+      const isSuperAdmin = request.user!.role === 'super_admin';
+      const stateId = request.user!.stateId;
+
+      // For state admins, verify the comment author is from their state
+      if (!isSuperAdmin) {
+        const comment = await queryOne<{ author_state_id: string }>(
+          `SELECT u.state_id as author_state_id 
+           FROM community_comments cc 
+           JOIN users u ON cc.author_user_id = u.id 
+           WHERE cc.id = $1`,
+          [id]
+        );
+        
+        if (!comment) {
+          return reply.status(404).send(errorResponse('Comment not found'));
+        }
+        
+        if (comment.author_state_id !== stateId) {
+          return reply.status(403).send(errorResponse('You can only moderate comments from your state'));
+        }
+      }
 
       await query('UPDATE community_comments SET is_hidden = true WHERE id = $1', [id]);
 
@@ -83,17 +125,31 @@ export default async function moderationRoutes(fastify: FastifyInstance) {
   fastify.get('/logs', { preHandler: [authenticateToken, requireStateAdmin] }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { page = '1', limit = '20' } = request.query as any;
+      const isSuperAdmin = request.user!.role === 'super_admin';
+      const stateId = request.user!.stateId;
+
+      // Build state filter for state admins - show only logs where moderator is from their state
+      const stateFilter = isSuperAdmin ? '' : 'WHERE u.state_id = $3';
+      const countFilter = isSuperAdmin ? '' : 'WHERE u.state_id = $1';
+      const params = isSuperAdmin 
+        ? [parseInt(limit), (parseInt(page) - 1) * parseInt(limit)] 
+        : [parseInt(limit), (parseInt(page) - 1) * parseInt(limit), stateId];
+      const countParams = isSuperAdmin ? [] : [stateId];
 
       const logs = await query(
         `SELECT ml.*, u.full_name as moderator_name
          FROM moderation_logs ml
          JOIN users u ON ml.moderator_user_id = u.id
+         ${stateFilter}
          ORDER BY ml.created_at DESC
          LIMIT $1 OFFSET $2`,
-        [parseInt(limit), (parseInt(page) - 1) * parseInt(limit)]
+        params
       );
 
-      const countResult = await queryOne<{ count: number }>('SELECT COUNT(*)::int as count FROM moderation_logs');
+      const countResult = await queryOne<{ count: number }>(
+        `SELECT COUNT(*)::int as count FROM moderation_logs ml JOIN users u ON ml.moderator_user_id = u.id ${countFilter}`,
+        countParams
+      );
 
       return reply.send(paginatedResponse(logs || [], countResult?.count || 0, parseInt(page), parseInt(limit)));
 

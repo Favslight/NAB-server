@@ -135,9 +135,10 @@ export default async function authRoutes(fastify: FastifyInstance) {
       // Generate JWT
       const token = fastify.jwt.sign({
         userId: newUser.id,
-        email: newUser.email,
+        email: newUser.email || '',
         role: newUser.role,
-      } as JWTPayload);
+        stateId: newUser.state_id,
+      });
 
       return reply.status(201).send(successResponse({
         user: {
@@ -218,9 +219,10 @@ export default async function authRoutes(fastify: FastifyInstance) {
       // Generate JWT
       const token = fastify.jwt.sign({
         userId: user.id,
-        email: user.email,
+        email: user.email || '',
         role: user.role,
-      } as JWTPayload);
+        stateId: user.state_id,
+      });
 
       return reply.send(successResponse({
         user: {
@@ -284,9 +286,10 @@ export default async function authRoutes(fastify: FastifyInstance) {
       // Generate JWT
       const token = fastify.jwt.sign({
         userId: newUser.id,
-        email: null,
+        email: '',
         role: 'guest',
-      } as JWTPayload);
+        stateId: newUser.state_id,
+      });
 
       return reply.status(201).send(successResponse({
         user: {
