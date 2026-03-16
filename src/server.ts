@@ -31,7 +31,7 @@ async function buildServer(): Promise<FastifyInstance> {
   // Register plugins
   // CORS
   await fastify.register(cors, {
-    origin: config.app.frontendUrl,
+    origin: "*",
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
     allowedHeaders: ['Content-Type', 'Authorization'],
