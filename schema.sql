@@ -632,7 +632,7 @@ INSERT INTO states (name, slug) VALUES
 
 -- Initialize state counters
 INSERT INTO state_counters (state_id, current_number)
-SELECT id, 0 FROM states;
+SELECT id, 1 FROM states;
 
 -- Insert default system settings
 INSERT INTO system_settings (key, value, value_type, description) VALUES

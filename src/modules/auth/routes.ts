@@ -77,8 +77,9 @@ export default async function authRoutes(fastify: FastifyInstance) {
 
       // Get next ID number for this state
       const counterResult = await queryOne<{ current_number: number }>(
-        `INSERT INTO state_counters (state_id, current_number) VALUES ($1, 1)
-         ON CONFLICT (state_id) DO UPDATE SET current_number = state_counters.current_number + 1
+        `UPDATE state_counters 
+         SET current_number = current_number + 1 
+         WHERE state_id = $1 
          RETURNING current_number`,
         [data.state_id]
       );
@@ -285,8 +286,9 @@ export default async function authRoutes(fastify: FastifyInstance) {
 
       // Get next ID number for this state
       const counterResult = await queryOne<{ current_number: number }>(
-        `INSERT INTO state_counters (state_id, current_number) VALUES ($1, 1)
-         ON CONFLICT (state_id) DO UPDATE SET current_number = state_counters.current_number + 1
+        `UPDATE state_counters 
+         SET current_number = current_number + 1 
+         WHERE state_id = $1 
          RETURNING current_number`,
         [data.state_id]
       );
