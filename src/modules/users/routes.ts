@@ -280,4 +280,40 @@ export default async function userRoutes(fastify: FastifyInstance) {
       return reply.status(500).send(errorResponse('Failed to fetch state hub', error.message));
     }
   });
+
+  // GET /api/users/my-hub - Get current user's state hub
+  fastify.get('/my-hub', { preHandler: authenticateToken }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const userId = request.user!.userId;
+
+      // Get user's state
+      const user = await queryOne<{ state_id: string }>(
+        'SELECT state_id FROM users WHERE id = $1',
+        [userId]
+      );
+
+      if (!user) {
+        return reply.status(404).send(errorResponse('User not found'));
+      }
+
+      // Get hub for user's state
+      const hub = await queryOne(
+        `SELECT sh.*, s.name as state_name
+         FROM state_hubs sh
+         JOIN states s ON sh.state_id = s.id
+         WHERE sh.state_id = $1`,
+        [user.state_id]
+      );
+
+      if (!hub) {
+        return reply.status(404).send(errorResponse('Hub not found for your state'));
+      }
+
+      return reply.send(successResponse(hub));
+
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.status(500).send(errorResponse('Failed to fetch your hub', error.message));
+    }
+  });
 }
