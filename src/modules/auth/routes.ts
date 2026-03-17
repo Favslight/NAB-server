@@ -13,7 +13,7 @@ import { isMembershipFeeEnabled, isGuestLoginEnabled } from '../../utils/setting
 const registerSchema = z.object({
   full_name: z.string().min(2).max(255),
   email: z.string().email(),
-  phone: z.string().min(10).max(20).optional(),
+  phone: z.string().min(10).max(20),
   password: z.string().min(8).max(100),
   state_id: z.string().uuid(),
   profession: z.string().max(100).optional(),
@@ -119,7 +119,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
           idNo,
           data.full_name,
           data.email,
-          data.phone || null,
+          data.phone,
           passwordHash,
           data.state_id,
           data.profession || null,
