@@ -11,7 +11,7 @@ const createPostSchema = z.object({
   title: z.string().min(1).max(300),
   content: z.string().max(10000),
   post_type: z.enum(['discussion', 'question', 'showcase', 'event', 'job']).default('discussion'),
-  state_hub_id: z.string().uuid().optional(),
+  hub_id: z.string().uuid().optional(),
   tags: z.array(z.string()).optional(),
   media_urls: z.array(z.string().url()).optional(),
 });
@@ -24,7 +24,7 @@ const createCommentSchema = z.object({
 const paginationSchema = z.object({
   page: z.string().regex(/^\d+$/).transform(Number).default('1'),
   limit: z.string().regex(/^\d+$/).transform(Number).default('20'),
-  state_hub_id: z.string().uuid().optional(),
+  hub_id: z.string().uuid().optional(),
   post_type: z.enum(['discussion', 'question', 'showcase', 'event', 'job']).optional(),
 });
 
@@ -32,28 +32,29 @@ export default async function communityRoutes(fastify: FastifyInstance) {
   // GET /api/community/posts - List posts
   fastify.get('/posts', { preHandler: [optionalAuth, validateQuery(paginationSchema)] }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const { page, limit, state_hub_id, post_type } = request.query as any;
+      const { page, limit, hub_id, post_type } = request.query as any;
 
       let sql = `SELECT p.*, u.full_name as author_name, u.avatar_url as author_avatar, s.name as state_name
                  FROM community_posts p
-                 JOIN users u ON p.user_id = u.id
-                 LEFT JOIN states s ON p.state_hub_id = s.id
+                 JOIN users u ON p.author_user_id = u.id
+                 LEFT JOIN state_hubs sh ON p.hub_id = sh.id
+                 LEFT JOIN states s ON sh.state_id = s.id
                  WHERE p.is_hidden = false`;
       let countSql = 'SELECT COUNT(*)::int as count FROM community_posts WHERE is_hidden = false';
       const params: any[] = [];
       let paramIndex = 0;
 
-      if (state_hub_id) {
+      if (hub_id) {
         paramIndex++;
-        sql += ` AND p.state_hub_id = $${paramIndex}`;
-        countSql += ` AND state_hub_id = $${paramIndex}`;
-        params.push(state_hub_id);
+        sql += ` AND p.hub_id = $${paramIndex}`;
+        countSql += ` AND hub_id = $${paramIndex}`;
+        params.push(hub_id);
       }
 
       if (post_type) {
         paramIndex++;
-        sql += ` AND p.post_type = $${paramIndex}`;
-        countSql += ` AND post_type = $${paramIndex}`;
+        sql += ` AND p.category = $${paramIndex}`;
+        countSql += ` AND category = $${paramIndex}`;
         params.push(post_type);
       }
 
@@ -82,16 +83,16 @@ export default async function communityRoutes(fastify: FastifyInstance) {
       const slug = slugify(data.title) + '-' + Date.now().toString(36);
 
       const post = await queryOne(
-        `INSERT INTO community_posts (user_id, state_hub_id, title, slug, content, post_type, tags, media_urls)
+        `INSERT INTO community_posts (author_user_id, hub_id, category, title, slug, body, tags, media_urls)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING *`,
         [
           userId,
-          data.state_hub_id || null,
+          data.hub_id || null,
+          data.post_type,
           data.title,
           slug,
           data.content,
-          data.post_type,
           data.tags || null,
           data.media_urls || null,
         ]
