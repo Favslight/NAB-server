@@ -1,7 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { query, queryOne } from '../../database/database';
-import { authenticateToken, requireAuth, requireSuperAdmin } from '../../middlewares/auth';
+import { authenticateToken, requireAuth, requireSuperAdmin, requireStateAdmin } from '../../middlewares/auth';
 import { validateBody, validateQuery } from '../../middlewares/validation';
 import { successResponse, errorResponse, paginatedResponse } from '../../utils/response';
 import { uploadImage } from '../../utils/cloudinary';
@@ -309,11 +309,104 @@ export default async function userRoutes(fastify: FastifyInstance) {
         return reply.status(404).send(errorResponse('Hub not found for your state'));
       }
 
-      return reply.send(successResponse(hub));
+      // Get member statistics for this state
+      const stats = await queryOne(
+        `SELECT 
+           COUNT(*)::int as total_members,
+           COUNT(CASE WHEN role = 'member' THEN 1 END)::int as active_members,
+           COUNT(CASE WHEN role = 'guest' THEN 1 END)::int as guests,
+           COUNT(CASE WHEN role = 'state_admin' THEN 1 END)::int as state_admins,
+           COUNT(CASE WHEN status = 'membership_active' THEN 1 END)::int as paid_members
+         FROM users 
+         WHERE state_id = $1`,
+        [user.state_id]
+      );
+
+      return reply.send(successResponse({
+        ...hub,
+        stats: stats || {
+          total_members: 0,
+          active_members: 0,
+          guests: 0,
+          state_admins: 0,
+          paid_members: 0
+        }
+      }));
 
     } catch (error: any) {
       request.log.error(error);
       return reply.status(500).send(errorResponse('Failed to fetch your hub', error.message));
+    }
+  });
+
+  // GET /api/users/state-members - Get all members in state (state admin only)
+  fastify.get('/state-members', { 
+    preHandler: [authenticateToken, requireStateAdmin] 
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const stateId = request.user!.stateId;
+      const { page = 1, limit = 50, role, status } = request.query as any;
+
+      // Build WHERE clause
+      let whereClause = 'WHERE u.state_id = $1';
+      let params: any[] = [stateId];
+      let paramIndex = 2;
+
+      if (role) {
+        whereClause += ` AND u.role = $${paramIndex}`;
+        params.push(role);
+        paramIndex++;
+      }
+
+      if (status) {
+        whereClause += ` AND u.status = $${paramIndex}`;
+        params.push(status);
+        paramIndex++;
+      }
+
+      // Get members with pagination
+      const members = await query(
+        `SELECT 
+           u.id,
+           u.id_no,
+           u.full_name,
+           u.email,
+           u.phone,
+           u.role,
+           u.status,
+           u.profession,
+           u.avatar_url,
+           u.created_at,
+           u.email_verified_at,
+           s.name as state_name,
+           m.plan_type,
+           m.status as membership_status,
+           m.expires_at as membership_expires_at
+         FROM users u
+         LEFT JOIN states s ON u.state_id = s.id
+         LEFT JOIN memberships m ON u.id = m.user_id AND m.status = 'active'
+         ${whereClause}
+         ORDER BY u.created_at DESC
+         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+        [...params, limit, (page - 1) * limit]
+      );
+
+      // Get total count
+      const countResult = await queryOne<{ count: number }>(
+        `SELECT COUNT(*)::int as count FROM users u ${whereClause}`,
+        params
+      );
+
+      return reply.send(paginatedResponse(
+        members || [], 
+        countResult?.count || 0, 
+        page, 
+        limit
+      ));
+
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.status(500).send(errorResponse('Failed to fetch state members', error.message));
     }
   });
 }

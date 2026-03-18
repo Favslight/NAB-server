@@ -28,10 +28,7 @@ const loginSchema = z.object({
   message: "Either email or id_no must be provided",
 });
 
-const guestLoginSchema = z.object({
-  full_name: z.string().min(2).max(255),
-  state_id: z.string().uuid(),
-});
+const guestLoginSchema = z.object({});
 
 const verifyEmailSchema = z.object({
   token: z.string(),
@@ -275,61 +272,25 @@ export default async function authRoutes(fastify: FastifyInstance) {
         return reply.status(403).send(errorResponse('Guest login is disabled'));
       }
 
-      const data = request.body as z.infer<typeof guestLoginSchema>;
-
-      // Get state for ID generation
-      const state = await queryOne<{ slug: string }>('SELECT slug FROM states WHERE id = $1', [data.state_id]);
-
-      if (!state) {
-        return reply.status(400).send(errorResponse('Invalid state'));
-      }
-
-      // Get next ID number for this state
-      const counterResult = await queryOne<{ current_number: number }>(
-        `UPDATE state_counters 
-         SET current_number = current_number + 1 
-         WHERE state_id = $1 
-         RETURNING current_number`,
-        [data.state_id]
-      );
-
-      const idNo = generateIdNo(state.slug, counterResult?.current_number || 1);
-
-      // Generate referral code
-      const referralCode = generateReferralCode(data.full_name);
-
-      // Create guest user
-      const newUser = await queryOne<User>(
-        `INSERT INTO users (id_no, full_name, email, phone, password_hash, state_id, role, status, referral_code)
-         VALUES ($1, $2, NULL, NULL, NULL, $3, 'guest', 'pending_verification', $4)
-         RETURNING *`,
-        [idNo, data.full_name, data.state_id, referralCode]
-      );
-
-      if (!newUser) {
-        return reply.status(500).send(errorResponse('Failed to create guest user'));
-      }
-
-      // Generate JWT
-      const token = fastify.jwt.sign({
-        userId: newUser.id,
+      // Create a simple guest token without creating a user record
+      const guestToken = fastify.jwt.sign({
+        userId: 'guest',
         email: '',
         role: 'guest',
-        stateId: newUser.state_id,
+        stateId: null,
       });
 
       return reply.status(201).send(successResponse({
         user: {
-          id: newUser.id,
-          id_no: newUser.id_no,
-          full_name: newUser.full_name,
+          id: 'guest',
+          id_no: 'GUEST',
+          full_name: 'Guest User',
           role: 'guest',
-          status: newUser.status,
-          referral_code: newUser.referral_code,
+          status: 'guest_access',
         },
-        token,
+        token: guestToken,
         isGuest: true,
-      }, 'Guest access granted. Dashboard is locked until you complete registration.'));
+      }, 'Guest access granted. Dashboard is in demo mode.'));
 
     } catch (error: any) {
       request.log.error(error);
