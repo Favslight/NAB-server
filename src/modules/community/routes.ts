@@ -12,7 +12,6 @@ const createPostSchema = z.object({
   content: z.string().max(10000),
   post_type: z.enum(['discussion', 'question', 'showcase', 'event', 'job']).default('discussion'),
   hub_id: z.string().uuid().optional(),
-  tags: z.array(z.string()).optional(),
   media_urls: z.array(z.string().url()).optional(),
 });
 
@@ -83,8 +82,8 @@ export default async function communityRoutes(fastify: FastifyInstance) {
       const slug = slugify(data.title) + '-' + Date.now().toString(36);
 
       const post = await queryOne(
-        `INSERT INTO community_posts (author_user_id, hub_id, category, title, slug, body, tags, media_urls)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        `INSERT INTO community_posts (author_user_id, hub_id, category, title, slug, body, media_urls)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING *`,
         [
           userId,
@@ -93,8 +92,7 @@ export default async function communityRoutes(fastify: FastifyInstance) {
           data.title,
           slug,
           data.content,
-          data.tags || null,
-          data.media_urls || null,
+          JSON.stringify(data.media_urls || []),
         ]
       );
 
