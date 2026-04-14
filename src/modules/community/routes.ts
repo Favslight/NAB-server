@@ -11,8 +11,8 @@ const createPostSchema = z.object({
   title: z.string().min(1).max(300),
   content: z.string().max(10000),
   post_type: z.enum(['discussion', 'question', 'showcase', 'event', 'job']).default('discussion'),
-  hub_id: z.string().uuid().optional(),
-  media_urls: z.array(z.string().url()).optional(),
+  hub_id: z.union([z.string().uuid(), z.literal(''), z.null()]).optional().transform(val => val === '' || val === null ? undefined : val),
+  media_urls: z.union([z.array(z.string().url()), z.null()]).optional().transform(val => val === null ? undefined : val),
 });
 
 const createCommentSchema = z.object({
