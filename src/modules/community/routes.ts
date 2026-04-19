@@ -82,15 +82,14 @@ export default async function communityRoutes(fastify: FastifyInstance) {
       const slug = slugify(data.title) + '-' + Date.now().toString(36);
 
       const post = await queryOne(
-        `INSERT INTO community_posts (author_user_id, hub_id, category, title, slug, body, media_urls)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+        `INSERT INTO community_posts (author_user_id, hub_id, category, title, body, media_urls)
+         VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING *`,
         [
           userId,
           data.hub_id || null,
           data.post_type,
           data.title,
-          slug,
           data.content,
           JSON.stringify(data.media_urls || []),
         ]
