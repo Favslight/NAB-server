@@ -78,53 +78,67 @@ export default async function communityRoutes(fastify: FastifyInstance) {
     try {
       const userId = request.user!.userId;
 
-      // Parse multipart form data
-      const parts = request.parts();
-      const files: Array<{ buffer: Buffer; mimetype: string; filename: string }> = [];
-      let fields: Record<string, string> = {};
-
-      for await (const part of parts) {
-        if (part.type === 'file') {
-          const buffer = await part.toBuffer();
-          files.push({
-            buffer,
-            mimetype: part.mimetype,
-            filename: part.filename,
-          });
-        } else {
-          fields[part.fieldname] = part.value as string;
-        }
-      }
-
-      // Validate fields
-      const validationResult = createPostSchema.safeParse(fields);
-      if (!validationResult.success) {
-        const errorMessages = validationResult.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ');
-        return reply.status(400).send(errorResponse('Validation failed', errorMessages));
-      }
-
-      const data = validationResult.data;
-
-      // Upload files to Cloudinary if any
+      let data: z.infer<typeof createPostSchema>;
       const mediaFiles: Array<{ url: string; publicId: string; type: string }> = [];
 
-      for (const file of files) {
-        const isVideo = file.mimetype.startsWith('video/');
-        const isImage = file.mimetype.startsWith('image/');
+      // Check if request is multipart (has files) or JSON
+      const contentType = request.headers['content-type'] || '';
+      const isMultipart = contentType.includes('multipart/form-data');
 
-        if (!isVideo && !isImage) {
-          return reply.status(400).send(errorResponse('Only image and video files are allowed'));
+      if (isMultipart) {
+        // Handle multipart form data with files
+        const parts = request.parts();
+        const files: Array<{ buffer: Buffer; mimetype: string; filename: string }> = [];
+        let fields: Record<string, string> = {};
+
+        for await (const part of parts) {
+          if (part.type === 'file') {
+            const buffer = await part.toBuffer();
+            files.push({
+              buffer,
+              mimetype: part.mimetype,
+              filename: part.filename,
+            });
+          } else {
+            fields[part.fieldname] = part.value as string;
+          }
         }
 
-        const uploadResult = isVideo
-          ? await uploadVideo(file.buffer, 'community', file.filename)
-          : await uploadImage(file.buffer, 'community', file.filename);
+        // Validate fields
+        const validationResult = createPostSchema.safeParse(fields);
+        if (!validationResult.success) {
+          const errorMessages = validationResult.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ');
+          return reply.status(400).send(errorResponse('Validation failed', errorMessages));
+        }
+        data = validationResult.data;
 
-        mediaFiles.push({
-          url: uploadResult.url,
-          publicId: uploadResult.publicId,
-          type: isVideo ? 'video' : 'image',
-        });
+        // Upload files to Cloudinary
+        for (const file of files) {
+          const isVideo = file.mimetype.startsWith('video/');
+          const isImage = file.mimetype.startsWith('image/');
+
+          if (!isVideo && !isImage) {
+            return reply.status(400).send(errorResponse('Only image and video files are allowed'));
+          }
+
+          const uploadResult = isVideo
+            ? await uploadVideo(file.buffer, 'community', file.filename)
+            : await uploadImage(file.buffer, 'community', file.filename);
+
+          mediaFiles.push({
+            url: uploadResult.url,
+            publicId: uploadResult.publicId,
+            type: isVideo ? 'video' : 'image',
+          });
+        }
+      } else {
+        // Handle JSON request (text-only posts)
+        const validationResult = createPostSchema.safeParse(request.body);
+        if (!validationResult.success) {
+          const errorMessages = validationResult.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ');
+          return reply.status(400).send(errorResponse('Validation failed', errorMessages));
+        }
+        data = validationResult.data;
       }
 
       const post = await queryOne(
