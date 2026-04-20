@@ -7,12 +7,12 @@ import { successResponse, errorResponse, paginatedResponse } from '../../utils/r
 import { uploadImage, uploadVideo } from '../../utils/cloudinary';
 import { slugify } from '../../utils/helpers';
 
+// Schema for multipart form data (file uploads)
 const createPostSchema = z.object({
   title: z.string().min(1).max(300),
   content: z.string().max(10000),
   post_type: z.enum(['discussion', 'question', 'showcase', 'event', 'job']).default('discussion'),
   hub_id: z.union([z.string().uuid(), z.literal(''), z.null()]).optional().transform(val => val === '' || val === null ? undefined : val),
-  media_urls: z.union([z.array(z.string().url()), z.null()]).optional().transform(val => val === null ? undefined : val),
 });
 
 const createCommentSchema = z.object({
@@ -73,16 +73,62 @@ export default async function communityRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // POST /api/community/posts - Create post
-  fastify.post('/posts', { preHandler: [authenticateToken, requireMember, validateBody(createPostSchema)] }, async (request: FastifyRequest, reply: FastifyReply) => {
+  // POST /api/community/posts - Create post (with optional file uploads)
+  fastify.post('/posts', { preHandler: [authenticateToken, requireMember] }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const data = request.body as z.infer<typeof createPostSchema>;
       const userId = request.user!.userId;
 
-      const slug = slugify(data.title) + '-' + Date.now().toString(36);
+      // Parse multipart form data
+      const parts = request.parts();
+      const files: Array<{ buffer: Buffer; mimetype: string; filename: string }> = [];
+      let fields: Record<string, string> = {};
+
+      for await (const part of parts) {
+        if (part.type === 'file') {
+          const buffer = await part.toBuffer();
+          files.push({
+            buffer,
+            mimetype: part.mimetype,
+            filename: part.filename,
+          });
+        } else {
+          fields[part.fieldname] = part.value as string;
+        }
+      }
+
+      // Validate fields
+      const validationResult = createPostSchema.safeParse(fields);
+      if (!validationResult.success) {
+        const errorMessages = validationResult.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join(', ');
+        return reply.status(400).send(errorResponse('Validation failed', errorMessages));
+      }
+
+      const data = validationResult.data;
+
+      // Upload files to Cloudinary if any
+      const mediaFiles: Array<{ url: string; publicId: string; type: string }> = [];
+
+      for (const file of files) {
+        const isVideo = file.mimetype.startsWith('video/');
+        const isImage = file.mimetype.startsWith('image/');
+
+        if (!isVideo && !isImage) {
+          return reply.status(400).send(errorResponse('Only image and video files are allowed'));
+        }
+
+        const uploadResult = isVideo
+          ? await uploadVideo(file.buffer, 'community', file.filename)
+          : await uploadImage(file.buffer, 'community', file.filename);
+
+        mediaFiles.push({
+          url: uploadResult.url,
+          publicId: uploadResult.publicId,
+          type: isVideo ? 'video' : 'image',
+        });
+      }
 
       const post = await queryOne(
-        `INSERT INTO community_posts (author_user_id, hub_id, category, title, body, media_urls)
+        `INSERT INTO community_posts (author_user_id, hub_id, category, title, body, media_files)
          VALUES ($1, $2, $3, $4, $5, $6)
          RETURNING *`,
         [
@@ -91,7 +137,7 @@ export default async function communityRoutes(fastify: FastifyInstance) {
           data.post_type,
           data.title,
           data.content,
-          JSON.stringify(data.media_urls || []),
+          JSON.stringify(mediaFiles),
         ]
       );
 
@@ -219,39 +265,4 @@ export default async function communityRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // POST /api/community/upload - Upload media for posts
-  fastify.post('/upload', { preHandler: [authenticateToken, requireMember] }, async (request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      const userId = request.user!.userId;
-
-      // Get file from multipart request
-      const file = await request.file();
-      if (!file) {
-        return reply.status(400).send(errorResponse('No file provided'));
-      }
-
-      const buffer = await file.toBuffer();
-      const isVideo = file.mimetype.startsWith('video/');
-      const isImage = file.mimetype.startsWith('image/');
-
-      if (!isVideo && !isImage) {
-        return reply.status(400).send(errorResponse('Only image and video files are allowed'));
-      }
-
-      // Upload to Cloudinary
-      const uploadResult = isVideo 
-        ? await uploadVideo(buffer, 'community')
-        : await uploadImage(buffer, 'community');
-
-      return reply.status(200).send(successResponse({
-        url: uploadResult.url,
-        publicId: uploadResult.publicId,
-        resourceType: isVideo ? 'video' : 'image',
-      }, 'File uploaded successfully'));
-
-    } catch (error: any) {
-      request.log.error(error);
-      return reply.status(500).send(errorResponse('Failed to upload file', error.message));
-    }
-  });
 }

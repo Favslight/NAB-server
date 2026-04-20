@@ -93,17 +93,25 @@ export default async function authRoutes(fastify: FastifyInstance) {
       const verificationToken = generateEmailVerificationToken();
 
       // Check if this is the first user for this state (for auto state_admin)
-      const userCount = await queryOne<{ count: number }>(
-        'SELECT COUNT(*)::int as count FROM users WHERE state_id = $1',
-        [data.state_id]
-      );
+      // Also check if there's already a state_admin to prevent duplicates
+      const [userCount, existingAdmin] = await Promise.all([
+        queryOne<{ count: number }>(
+          'SELECT COUNT(*)::int as count FROM users WHERE state_id = $1',
+          [data.state_id]
+        ),
+        queryOne<{ id: string }>(
+          'SELECT id FROM users WHERE state_id = $1 AND role = $2 LIMIT 1',
+          [data.state_id, 'state_admin']
+        )
+      ]);
 
-      const isFirstInState = (userCount?.count || 0) === 0;
+      // Only assign state_admin if no users exist AND no state_admin exists
+      const isFirstInState = (userCount?.count || 0) === 0 && !existingAdmin;
 
       // Check if membership fee is enabled
       const feeEnabled = await isMembershipFeeEnabled();
 
-      // Determine role and status based on payment setting
+      // Determine role and status based on payment setting and first user check
       const userRole = isFirstInState ? 'state_admin' : (feeEnabled ? 'guest' : 'member');
       const userStatus = feeEnabled ? 'pending_verification' : 'membership_active';
 

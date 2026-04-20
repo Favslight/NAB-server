@@ -180,7 +180,7 @@ CREATE TABLE community_posts (
     category VARCHAR(50) DEFAULT 'general',
     title VARCHAR(255) NOT NULL,
     body TEXT NOT NULL,
-    media_urls JSONB DEFAULT '[]',
+    media_files JSONB DEFAULT '[]',
     visibility post_visibility DEFAULT 'public',
     is_featured BOOLEAN DEFAULT FALSE,
     is_hidden BOOLEAN DEFAULT FALSE,
