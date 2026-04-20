@@ -72,16 +72,23 @@ export default async function authRoutes(fastify: FastifyInstance) {
         return reply.status(400).send(errorResponse('Invalid state'));
       }
 
-      // Get next ID number for this state
-      const counterResult = await queryOne<{ current_number: number }>(
-        `UPDATE state_counters 
-         SET current_number = current_number + 1 
-         WHERE state_id = $1 
-         RETURNING current_number`,
-        [data.state_id]
+      // Get next ID number by checking existing users in this state
+      const existingUsers = await query<{ id_no: string }>(
+        `SELECT id_no FROM users WHERE state_id = $1 AND id_no LIKE $2 ORDER BY id_no DESC`,
+        [data.state_id, `NAB-${state.slug.slice(0, 3).toUpperCase()}-%`]
       );
 
-      const idNo = generateIdNo(state.slug, counterResult?.current_number || 1);
+      let nextNumber = 1;
+      if (existingUsers && existingUsers.length > 0) {
+        // Extract numbers from existing IDs and find max
+        const numbers = existingUsers.map(u => {
+          const match = u.id_no.match(/-(\d+)$/);
+          return match ? parseInt(match[1], 10) : 0;
+        });
+        nextNumber = Math.max(...numbers) + 1;
+      }
+
+      const idNo = generateIdNo(state.slug, nextNumber);
 
       // Generate referral code
       const referralCode = generateReferralCode(data.full_name);
