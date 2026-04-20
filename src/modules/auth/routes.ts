@@ -112,14 +112,6 @@ export default async function authRoutes(fastify: FastifyInstance) {
         )
       ]);
 
-      // Debug logging
-      console.log('State admin check:', {
-        state_id: data.state_id,
-        userCount: userCount?.count,
-        existingAdmin: existingAdmin,
-        isFirstInState: (userCount?.count || 0) === 0 && (!existingAdmin || !existingAdmin.id)
-      });
-
       // Only assign state_admin if no users exist AND no state_admin exists
       const isFirstInState = (userCount?.count || 0) === 0 && (!existingAdmin || !existingAdmin.id);
 
@@ -128,7 +120,6 @@ export default async function authRoutes(fastify: FastifyInstance) {
 
       // Determine role and status based on payment setting and first user check
       const userRole = isFirstInState ? 'state_admin' : (feeEnabled ? 'guest' : 'member');
-      console.log('Assigned role:', userRole, 'isFirstInState:', isFirstInState);
       const userStatus = feeEnabled ? 'pending_verification' : 'membership_active';
 
       // Create user
