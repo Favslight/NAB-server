@@ -118,9 +118,12 @@ export default async function authRoutes(fastify: FastifyInstance) {
       // Check if membership fee is enabled
       const feeEnabled = await isMembershipFeeEnabled();
 
-      // Determine role and status based on payment setting and first user check
+      // Determine role: state_admin for first user, otherwise guest (if fee enabled) or member (if fee disabled)
       const userRole = isFirstInState ? 'state_admin' : (feeEnabled ? 'guest' : 'member');
-      const userStatus = feeEnabled ? 'pending_verification' : 'membership_active';
+      
+      // All users (except super admin) start as pending_verification
+      // They must pay to become membership_active and access training materials
+      const userStatus = 'pending_verification';
 
       // Create user
       const newUser = await queryOne<User>(

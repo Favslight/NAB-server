@@ -1,8 +1,8 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { query, queryOne } from '../../database/database';
-import { authenticateToken, optionalAuth, requireMember, requireStateAdmin } from '../../middlewares/auth';
-import { validateQuery } from '../../middlewares/validation';
+import { authenticateToken, optionalAuth, requireMember, requireStateAdmin, requireSuperAdmin } from '../../middlewares/auth';
+import { validateQuery, validateBody } from '../../middlewares/validation';
 import { successResponse, paginatedResponse, errorResponse } from '../../utils/response';
 import { uploadImage, uploadVideo } from '../../utils/cloudinary';
 
@@ -10,6 +10,40 @@ const paginationSchema = z.object({
   page: z.string().regex(/^\d+$/).transform(Number).default('1'),
   limit: z.string().regex(/^\d+$/).transform(Number).default('20'),
   category: z.string().optional(),
+});
+
+const createTrainingSchema = z.object({
+  title: z.string().min(1).max(255),
+  description: z.string().optional(),
+  category: z.string().min(1).max(50),
+  access_level: z.enum(['guest', 'member', 'premium_builder']).default('member'),
+  duration_minutes: z.number().positive().optional(),
+  is_published: z.boolean().default(false),
+});
+
+const updateTrainingSchema = z.object({
+  title: z.string().min(1).max(255).optional(),
+  description: z.string().optional(),
+  category: z.string().min(1).max(50).optional(),
+  access_level: z.enum(['guest', 'member', 'premium_builder']).optional(),
+  duration_minutes: z.number().positive().optional(),
+  is_published: z.boolean().optional(),
+});
+
+const createLessonSchema = z.object({
+  title: z.string().min(1).max(255),
+  description: z.string().optional(),
+  order_index: z.number().int().nonnegative().default(0),
+  duration_minutes: z.number().positive().optional(),
+  is_published: z.boolean().default(false),
+});
+
+const updateLessonSchema = z.object({
+  title: z.string().min(1).max(255).optional(),
+  description: z.string().optional(),
+  order_index: z.number().int().nonnegative().optional(),
+  duration_minutes: z.number().positive().optional(),
+  is_published: z.boolean().optional(),
 });
 
 export default async function trainingRoutes(fastify: FastifyInstance) {
@@ -180,6 +214,243 @@ export default async function trainingRoutes(fastify: FastifyInstance) {
     } catch (error: any) {
       request.log.error(error);
       return reply.status(500).send(errorResponse('Failed to fetch categories', error.message));
+    }
+  });
+
+  // POST /api/trainings - Create new training (super admin only)
+  fastify.post('/', { preHandler: [authenticateToken, requireSuperAdmin, validateBody(createTrainingSchema)] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const data = request.body as z.infer<typeof createTrainingSchema>;
+      
+      // Generate slug from title
+      const slug = data.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      
+      const training = await queryOne(
+        `INSERT INTO trainings (title, slug, description, category, access_level, duration_minutes, is_published)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING *`,
+        [
+          data.title,
+          slug,
+          data.description || null,
+          data.category,
+          data.access_level,
+          data.duration_minutes || null,
+          data.is_published,
+        ]
+      );
+
+      return reply.status(201).send(successResponse(training, 'Training created successfully'));
+
+    } catch (error: any) {
+      request.log.error(error);
+      if (error.message?.includes('unique constraint')) {
+        return reply.status(409).send(errorResponse('A training with this title/slug already exists'));
+      }
+      return reply.status(500).send(errorResponse('Failed to create training', error.message));
+    }
+  });
+
+  // PUT /api/trainings/:id - Update training (super admin only)
+  fastify.put('/:id', { preHandler: [authenticateToken, requireSuperAdmin, validateBody(updateTrainingSchema)] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const data = request.body as z.infer<typeof updateTrainingSchema>;
+      
+      // Build dynamic update query
+      const updates: string[] = [];
+      const values: any[] = [];
+      let paramIndex = 0;
+      
+      if (data.title !== undefined) {
+        updates.push(`title = $${++paramIndex}`);
+        values.push(data.title);
+        // Update slug when title changes
+        updates.push(`slug = $${++paramIndex}`);
+        values.push(data.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
+      }
+      if (data.description !== undefined) {
+        updates.push(`description = $${++paramIndex}`);
+        values.push(data.description);
+      }
+      if (data.category !== undefined) {
+        updates.push(`category = $${++paramIndex}`);
+        values.push(data.category);
+      }
+      if (data.access_level !== undefined) {
+        updates.push(`access_level = $${++paramIndex}`);
+        values.push(data.access_level);
+      }
+      if (data.duration_minutes !== undefined) {
+        updates.push(`duration_minutes = $${++paramIndex}`);
+        values.push(data.duration_minutes);
+      }
+      if (data.is_published !== undefined) {
+        updates.push(`is_published = $${++paramIndex}`);
+        values.push(data.is_published);
+      }
+      
+      if (updates.length === 0) {
+        return reply.status(400).send(errorResponse('No fields to update'));
+      }
+      
+      updates.push(`updated_at = $${++paramIndex}`);
+      values.push(new Date().toISOString());
+      values.push(id);
+      
+      const training = await queryOne(
+        `UPDATE trainings SET ${updates.join(', ')} WHERE id = $${paramIndex + 1} RETURNING *`,
+        values
+      );
+
+      if (!training) {
+        return reply.status(404).send(errorResponse('Training not found'));
+      }
+
+      return reply.send(successResponse(training, 'Training updated successfully'));
+
+    } catch (error: any) {
+      request.log.error(error);
+      if (error.message?.includes('unique constraint')) {
+        return reply.status(409).send(errorResponse('A training with this title/slug already exists'));
+      }
+      return reply.status(500).send(errorResponse('Failed to update training', error.message));
+    }
+  });
+
+  // DELETE /api/trainings/:id - Delete training (super admin only)
+  fastify.delete('/:id', { preHandler: [authenticateToken, requireSuperAdmin] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { id } = request.params as { id: string };
+      
+      const result = await queryOne(
+        'DELETE FROM trainings WHERE id = $1 RETURNING id',
+        [id]
+      );
+
+      if (!result) {
+        return reply.status(404).send(errorResponse('Training not found'));
+      }
+
+      return reply.send(successResponse(null, 'Training deleted successfully'));
+
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.status(500).send(errorResponse('Failed to delete training', error.message));
+    }
+  });
+
+  // POST /api/trainings/:id/lessons - Create lesson (super admin only)
+  fastify.post('/:id/lessons', { preHandler: [authenticateToken, requireSuperAdmin, validateBody(createLessonSchema)] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const data = request.body as z.infer<typeof createLessonSchema>;
+      
+      // Verify training exists
+      const training = await queryOne<{ id: string }>('SELECT id FROM trainings WHERE id = $1', [id]);
+      if (!training) {
+        return reply.status(404).send(errorResponse('Training not found'));
+      }
+      
+      const lesson = await queryOne(
+        `INSERT INTO training_lessons (training_id, title, description, order_index, duration_minutes, is_published)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING *`,
+        [
+          id,
+          data.title,
+          data.description || null,
+          data.order_index,
+          data.duration_minutes || null,
+          data.is_published,
+        ]
+      );
+
+      return reply.status(201).send(successResponse(lesson, 'Lesson created successfully'));
+
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.status(500).send(errorResponse('Failed to create lesson', error.message));
+    }
+  });
+
+  // PUT /api/trainings/:id/lessons/:lessonId - Update lesson (super admin only)
+  fastify.put('/:id/lessons/:lessonId', { preHandler: [authenticateToken, requireSuperAdmin, validateBody(updateLessonSchema)] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { id, lessonId } = request.params as { id: string; lessonId: string };
+      const data = request.body as z.infer<typeof updateLessonSchema>;
+      
+      // Build dynamic update query
+      const updates: string[] = [];
+      const values: any[] = [];
+      let paramIndex = 0;
+      
+      if (data.title !== undefined) {
+        updates.push(`title = $${++paramIndex}`);
+        values.push(data.title);
+      }
+      if (data.description !== undefined) {
+        updates.push(`description = $${++paramIndex}`);
+        values.push(data.description);
+      }
+      if (data.order_index !== undefined) {
+        updates.push(`order_index = $${++paramIndex}`);
+        values.push(data.order_index);
+      }
+      if (data.duration_minutes !== undefined) {
+        updates.push(`duration_minutes = $${++paramIndex}`);
+        values.push(data.duration_minutes);
+      }
+      if (data.is_published !== undefined) {
+        updates.push(`is_published = $${++paramIndex}`);
+        values.push(data.is_published);
+      }
+      
+      if (updates.length === 0) {
+        return reply.status(400).send(errorResponse('No fields to update'));
+      }
+      
+      updates.push(`updated_at = $${++paramIndex}`);
+      values.push(new Date().toISOString());
+      values.push(lessonId);
+      values.push(id);
+      
+      const lesson = await queryOne(
+        `UPDATE training_lessons SET ${updates.join(', ')} WHERE id = $${paramIndex + 1} AND training_id = $${paramIndex + 2} RETURNING *`,
+        values
+      );
+
+      if (!lesson) {
+        return reply.status(404).send(errorResponse('Lesson not found'));
+      }
+
+      return reply.send(successResponse(lesson, 'Lesson updated successfully'));
+
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.status(500).send(errorResponse('Failed to update lesson', error.message));
+    }
+  });
+
+  // DELETE /api/trainings/:id/lessons/:lessonId - Delete lesson (super admin only)
+  fastify.delete('/:id/lessons/:lessonId', { preHandler: [authenticateToken, requireSuperAdmin] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { id, lessonId } = request.params as { id: string; lessonId: string };
+      
+      const result = await queryOne(
+        'DELETE FROM training_lessons WHERE id = $1 AND training_id = $2 RETURNING id',
+        [lessonId, id]
+      );
+
+      if (!result) {
+        return reply.status(404).send(errorResponse('Lesson not found'));
+      }
+
+      return reply.send(successResponse(null, 'Lesson deleted successfully'));
+
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.status(500).send(errorResponse('Failed to delete lesson', error.message));
     }
   });
 
