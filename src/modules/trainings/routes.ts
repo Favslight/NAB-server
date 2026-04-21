@@ -54,7 +54,7 @@ export default async function trainingRoutes(fastify: FastifyInstance) {
       const user = request.user;
 
       let sql = 'SELECT * FROM trainings WHERE is_published = true';
-      let countSql = 'SELECT COUNT(*)::int as count FROM trainings WHERE is_published = true';
+      let countSql = 'SELECT COUNT(*)::int as count FROM trainings WHERE is_published = false';
       const params: any[] = [];
       let paramIndex = 0;
 
