@@ -220,7 +220,7 @@ export default async function communityRoutes(fastify: FastifyInstance) {
       }
 
       const comment = await queryOne(
-        `INSERT INTO community_comments (post_id, author_user_id, content, parent_comment_id)
+        `INSERT INTO community_comments (post_id, author_user_id, body, parent_comment_id)
          VALUES ($1, $2, $3, $4)
          RETURNING *`,
         [id, userId, data.content, data.parent_comment_id || null]
