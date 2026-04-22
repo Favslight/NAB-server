@@ -171,8 +171,9 @@ export default async function communityRoutes(fastify: FastifyInstance) {
       const post = await queryOne(
         `SELECT p.*, u.full_name as author_name, u.avatar_url as author_avatar, s.name as state_name
          FROM community_posts p
-         JOIN users u ON p.user_id = u.id
-         LEFT JOIN states s ON p.state_hub_id = s.id
+         JOIN users u ON p.author_user_id = u.id
+         LEFT JOIN state_hubs sh ON p.hub_id = sh.id
+         LEFT JOIN states s ON sh.state_id = s.id
          WHERE p.id = $1 AND p.is_hidden = false`,
         [id]
       );
@@ -188,7 +189,7 @@ export default async function communityRoutes(fastify: FastifyInstance) {
       const comments = await query(
         `SELECT c.*, u.full_name as author_name, u.avatar_url as author_avatar
          FROM community_comments c
-         JOIN users u ON c.user_id = u.id
+         JOIN users u ON c.author_user_id = u.id
          WHERE c.post_id = $1 AND c.is_hidden = false
          ORDER BY c.created_at ASC`,
         [id]
@@ -219,21 +220,21 @@ export default async function communityRoutes(fastify: FastifyInstance) {
       }
 
       const comment = await queryOne(
-        `INSERT INTO community_comments (post_id, user_id, content, parent_comment_id)
+        `INSERT INTO community_comments (post_id, author_user_id, content, parent_comment_id)
          VALUES ($1, $2, $3, $4)
          RETURNING *`,
         [id, userId, data.content, data.parent_comment_id || null]
       );
 
       // Update post comment count
-      await query('UPDATE community_posts SET comment_count = comment_count + 1 WHERE id = $1', [id]);
+      await query('UPDATE community_posts SET comments_count = comments_count + 1 WHERE id = $1', [id]);
 
       // Notify post author
-      const postAuthor = await queryOne('SELECT user_id FROM community_posts WHERE id = $1', [id]);
-      if (postAuthor && postAuthor.user_id !== userId) {
+      const postAuthor = await queryOne('SELECT author_user_id FROM community_posts WHERE id = $1', [id]);
+      if (postAuthor && postAuthor.author_user_id !== userId) {
         await query(
           'INSERT INTO notifications (user_id, type, title, body, data_json) VALUES ($1, $2, $3, $4, $5)',
-          [postAuthor.user_id, 'post_comment', 'New Comment', 'Someone commented on your post', JSON.stringify({ post_id: id, comment_id: comment?.id })]
+          [postAuthor.author_user_id, 'post_comment', 'New Comment', 'Someone commented on your post', JSON.stringify({ post_id: id, comment_id: comment?.id })]
         );
       }
 
@@ -260,7 +261,7 @@ export default async function communityRoutes(fastify: FastifyInstance) {
       if (existing) {
         // Unlike
         await query('DELETE FROM post_reactions WHERE id = $1', [existing.id]);
-        await query('UPDATE community_posts SET like_count = like_count - 1 WHERE id = $1', [id]);
+        await query('UPDATE community_posts SET likes_count = likes_count - 1 WHERE id = $1', [id]);
         return reply.send(successResponse(null, 'Like removed'));
       }
 
@@ -269,7 +270,7 @@ export default async function communityRoutes(fastify: FastifyInstance) {
         'INSERT INTO post_reactions (post_id, user_id) VALUES ($1, $2)',
         [id, userId]
       );
-      await query('UPDATE community_posts SET like_count = like_count + 1 WHERE id = $1', [id]);
+      await query('UPDATE community_posts SET likes_count = likes_count + 1 WHERE id = $1', [id]);
 
       return reply.send(successResponse(null, 'Post liked'));
 
