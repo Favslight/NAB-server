@@ -1,7 +1,7 @@
 // Types matching database schema
 
 export type UserRole = 'guest' | 'member' | 'premium_builder' | 'state_admin' | 'super_admin';
-export type UserStatus = 'pending_verification' | 'verified' | 'membership_inactive' | 'membership_active' | 'course_applicant' | 'course_enrolled' | 'suspended';
+export type UserStatus = 'pending_verification' | 'verified' | 'membership_inactive' | 'membership_active' | 'course_applicant' | 'course_enrolled' | 'suspended' | 'pending_admin_approval';
 export type MembershipPlanType = 'standard_member';
 export type MembershipStatus = 'pending' | 'active' | 'expired' | 'cancelled';
 export type TransactionType = 'membership' | 'course' | 'event' | 'other';

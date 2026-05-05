@@ -10,7 +10,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- ============================================
 
 CREATE TYPE user_role AS ENUM ('guest', 'member', 'premium_builder', 'state_admin', 'super_admin');
-CREATE TYPE user_status AS ENUM ('pending_verification', 'verified', 'membership_inactive', 'membership_active', 'course_applicant', 'course_enrolled', 'suspended');
+CREATE TYPE user_status AS ENUM ('pending_verification', 'verified', 'membership_inactive', 'membership_active', 'course_applicant', 'course_enrolled', 'suspended', 'pending_admin_approval');
 CREATE TYPE membership_plan_type AS ENUM ('standard_member');
 CREATE TYPE membership_status AS ENUM ('pending', 'active', 'expired', 'cancelled');
 CREATE TYPE transaction_type AS ENUM ('membership', 'course', 'event', 'other');
@@ -642,7 +642,8 @@ INSERT INTO system_settings (key, value, value_type, description) VALUES
 ('referral_reward_naira', '500', 'number', 'Referral reward amount in Naira'),
 ('enable_guest_login', 'true', 'boolean', 'Allow guest login without registration'),
 ('maintenance_mode', 'false', 'boolean', 'Put site in maintenance mode'),
-('site_name', 'Nigerian AI Builders', 'string', 'Site name');
+('site_name', 'Nigerian AI Builders', 'string', 'Site name'),
+('require_admin_approval', 'false', 'boolean', 'Require admin approval for new user signups. When true, users join waitlist and must be approved before they can log in');
 
 -- Create default state hubs
 INSERT INTO state_hubs (name, slug, state_id, description)

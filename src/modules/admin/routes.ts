@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { query, queryOne } from '../../database/database';
+import { User } from '../../database/types';
 import { authenticateToken, requireSuperAdmin, requireStateAdmin } from '../../middlewares/auth';
 import { validateBody, validateQuery } from '../../middlewares/validation';
 import { successResponse, paginatedResponse, errorResponse } from '../../utils/response';
@@ -24,7 +25,12 @@ const updateUserRoleSchema = z.object({
 });
 
 const updateUserStatusSchema = z.object({
-  status: z.enum(['pending_verification', 'verified', 'membership_inactive', 'membership_active', 'suspended']),
+  status: z.enum(['pending_verification', 'verified', 'membership_inactive', 'membership_active', 'suspended', 'pending_admin_approval']),
+});
+
+const reviewUserSchema = z.object({
+  action: z.enum(['approve', 'reject']),
+  notes: z.string().optional(),
 });
 
 const createCohortSchema = z.object({
@@ -53,6 +59,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         totalMembers,
         pendingProducts,
         pendingApplications,
+        pendingUsers,
         totalPosts,
         recentTransactions
       ] = await Promise.all([
@@ -60,6 +67,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         queryOne<{ count: number }>(`SELECT COUNT(*)::int as count FROM users u WHERE role = 'member' ${stateFilter}`, stateParam),
         queryOne<{ count: number }>(`SELECT COUNT(*)::int as count FROM products WHERE status = 'pending_review'`),
         queryOne<{ count: number }>(`SELECT COUNT(*)::int as count FROM program_applications pa JOIN users u ON pa.user_id = u.id WHERE pa.status = 'pending' ${stateFilter.replace('u.', 'u.')}`),
+        queryOne<{ count: number }>(`SELECT COUNT(*)::int as count FROM users u WHERE status = 'pending_admin_approval' ${stateFilter}`, stateParam),
         queryOne<{ count: number }>(`SELECT COUNT(*)::int as count FROM community_posts`),
         query<{ amount: number; status: string }>(`SELECT t.amount, t.status FROM transactions t JOIN users u ON t.user_id = u.id WHERE t.status = 'success' ${stateFilter} ORDER BY t.created_at DESC LIMIT 100`, stateParam)
       ]);
@@ -70,10 +78,12 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         users: {
           total: totalUsers?.count || 0,
           members: totalMembers?.count || 0,
+          pending_approval: pendingUsers?.count || 0,
         },
         pending: {
           products: pendingProducts?.count || 0,
           applications: pendingApplications?.count || 0,
+          users: pendingUsers?.count || 0,
         },
         content: {
           posts: totalPosts?.count || 0,
@@ -348,6 +358,122 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     } catch (error: any) {
       request.log.error(error);
       return reply.status(500).send(errorResponse('Failed to fetch audit logs', error.message));
+    }
+  });
+
+  // GET /api/admin/pending-users - List users pending admin approval
+  fastify.get('/pending-users', { 
+    preHandler: [authenticateToken, requireStateAdmin, validateQuery(paginationSchema)] 
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { page, limit } = request.query as any;
+      const isSuperAdmin = request.user!.role === 'super_admin';
+      const stateId = request.user!.stateId;
+
+      // Build state filter
+      const stateFilter = isSuperAdmin ? '' : 'AND u.state_id = $3';
+      const countFilter = isSuperAdmin ? '' : 'AND state_id = $1';
+      const params = isSuperAdmin ? [limit, (page - 1) * limit] : [limit, (page - 1) * limit, stateId];
+      const countParams = isSuperAdmin ? [] : [stateId];
+
+      const users = await query(
+        `SELECT u.*, s.name as state_name
+         FROM users u
+         LEFT JOIN states s ON u.state_id = s.id
+         WHERE u.status = 'pending_admin_approval' ${stateFilter}
+         ORDER BY u.created_at ASC
+         LIMIT $1 OFFSET $2`,
+        params
+      );
+
+      const countResult = await queryOne<{ count: number }>(
+        `SELECT COUNT(*)::int as count FROM users WHERE status = 'pending_admin_approval' ${countFilter}`,
+        countParams
+      );
+
+      return reply.send(paginatedResponse(users || [], countResult?.count || 0, page, limit));
+
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.status(500).send(errorResponse('Failed to fetch pending users', error.message));
+    }
+  });
+
+  // POST /api/admin/pending-users/:id/review - Approve or reject a pending user
+  fastify.post('/pending-users/:id/review', { 
+    preHandler: [authenticateToken, requireStateAdmin, validateBody(reviewUserSchema)] 
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const { action, notes } = request.body as z.infer<typeof reviewUserSchema>;
+      const adminId = request.user!.userId;
+      const isSuperAdmin = request.user!.role === 'super_admin';
+      const stateId = request.user!.stateId;
+
+      // Get user and verify state access
+      const userQuery = isSuperAdmin 
+        ? 'SELECT * FROM users WHERE id = $1 AND status = $2'
+        : 'SELECT * FROM users WHERE id = $1 AND status = $2 AND state_id = $3';
+      const userParams = isSuperAdmin ? [id, 'pending_admin_approval'] : [id, 'pending_admin_approval', stateId];
+
+      const user = await queryOne<User>(userQuery, userParams);
+
+      if (!user) {
+        return reply.status(404).send(errorResponse('Pending user not found or you do not have access'));
+      }
+
+      if (action === 'approve') {
+        // Approve user: set status to pending_verification and create membership if free
+        const feeEnabled = await queryOne<{ value: string }>("SELECT value FROM system_settings WHERE key = 'enable_membership_fee'");
+        const isFeeEnabled = feeEnabled?.value === 'true';
+
+        const newStatus = 'pending_verification';
+        const newRole = isFeeEnabled ? 'guest' : 'member';
+
+        await queryOne(
+          'UPDATE users SET status = $1, role = $2 WHERE id = $3 RETURNING *',
+          [newStatus, newRole, id]
+        );
+
+        // Create membership record if free
+        if (!isFeeEnabled) {
+          await query(
+            `INSERT INTO memberships (user_id, plan_type, amount_paid, status, starts_at, expires_at)
+             VALUES ($1, 'standard_member', 0, 'active', $2, $3)`,
+            [id, new Date().toISOString(), new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()]
+          );
+        }
+
+        // Log audit
+        await query(
+          'INSERT INTO admin_audit_logs (admin_user_id, action, entity_type, entity_id, new_values_json) VALUES ($1, $2, $3, $4, $5)',
+          [adminId, 'approve_user', 'user', id, JSON.stringify({ status: newStatus, role: newRole, notes })]
+        );
+
+        // Notify user
+        await query(
+          'INSERT INTO notifications (user_id, type, title, body) VALUES ($1, $2, $3, $4)',
+          [id, 'general', 'Account Approved!', 'Your account has been approved by an admin. You can now log in.']
+        );
+
+        return reply.send(successResponse(null, 'User approved successfully'));
+
+      } else {
+        // Reject user: delete the user account
+        await query('DELETE FROM users WHERE id = $1', [id]);
+
+        // Log audit
+        await query(
+          'INSERT INTO admin_audit_logs (admin_user_id, action, entity_type, entity_id, old_values_json) VALUES ($1, $2, $3, $4, $5)',
+          [adminId, 'reject_user', 'user', id, JSON.stringify({ user: user, notes })]
+        );
+
+        return reply.send(successResponse(null, 'User rejected and removed'));
+      }
+
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.status(500).send(errorResponse('Failed to review user', error.message));
     }
   });
 

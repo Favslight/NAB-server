@@ -59,6 +59,10 @@ export async function isMaintenanceMode(): Promise<boolean> {
   return getBooleanSetting('maintenance_mode', false);
 }
 
+export async function isAdminApprovalRequired(): Promise<boolean> {
+  return getBooleanSetting('require_admin_approval', false);
+}
+
 export async function getSiteName(): Promise<string> {
   return getStringSetting('site_name', 'Nigerian AI Builders');
 }

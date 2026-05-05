@@ -7,7 +7,7 @@ import { generateReferralCode, generateIdNo, generateEmailVerificationToken } fr
 import { successResponse, errorResponse } from '../../utils/response';
 import { validateBody } from '../../middlewares/validation';
 import { authenticateToken } from '../../middlewares/auth';
-import { isMembershipFeeEnabled, isGuestLoginEnabled } from '../../utils/settings';
+import { isMembershipFeeEnabled, isGuestLoginEnabled, isAdminApprovalRequired } from '../../utils/settings';
 
 // Schemas
 const registerSchema = z.object({
@@ -115,15 +115,17 @@ export default async function authRoutes(fastify: FastifyInstance) {
       // Only assign state_admin if no users exist AND no state_admin exists
       const isFirstInState = (userCount?.count || 0) === 0 && (!existingAdmin || !existingAdmin.id);
 
-      // Check if membership fee is enabled
+      // Check system settings
       const feeEnabled = await isMembershipFeeEnabled();
+      const adminApprovalRequired = await isAdminApprovalRequired();
 
       // Determine role: state_admin for first user, otherwise guest (if fee enabled) or member (if fee disabled)
       const userRole = isFirstInState ? 'state_admin' : (feeEnabled ? 'guest' : 'member');
       
-      // All users (except super admin) start as pending_verification
-      // They must pay to become membership_active and access training materials
-      const userStatus = 'pending_verification';
+      // Determine status based on admin approval setting
+      // If admin approval is required, users start as pending_admin_approval
+      // Otherwise, they start as pending_verification
+      const userStatus = adminApprovalRequired ? 'pending_admin_approval' : 'pending_verification';
 
       // Create user
       const newUser = await queryOne<User>(
@@ -158,7 +160,8 @@ export default async function authRoutes(fastify: FastifyInstance) {
       }
 
       // If membership is free, create membership record immediately
-      if (!feeEnabled && !isFirstInState) {
+      // Only create membership automatically if not requiring admin approval
+      if (!adminApprovalRequired && !feeEnabled && !isFirstInState) {
         await query(
           `INSERT INTO memberships (user_id, plan_type, amount_paid, status, starts_at, expires_at)
            VALUES ($1, 'standard_member', 0, 'active', $2, $3)`,
@@ -166,7 +169,24 @@ export default async function authRoutes(fastify: FastifyInstance) {
         );
       }
 
-      // Generate JWT
+      // If admin approval is required, don't generate JWT (user can't login yet)
+      // Return waitlist message instead
+      if (adminApprovalRequired) {
+        return reply.status(201).send(successResponse({
+          user: {
+            id: newUser.id,
+            id_no: newUser.id_no,
+            full_name: newUser.full_name,
+            email: newUser.email,
+            role: newUser.role,
+            status: newUser.status,
+            referral_code: newUser.referral_code,
+          },
+          pendingApproval: true,
+        }, 'Thank you for joining our waitlist. Your account is pending admin approval.'));
+      }
+
+      // Generate JWT for non-pending users
       const token = fastify.jwt.sign({
         userId: newUser.id,
         email: newUser.email || '',
@@ -219,6 +239,11 @@ export default async function authRoutes(fastify: FastifyInstance) {
 
       if (!user) {
         return reply.status(401).send(errorResponse('Invalid credentials'));
+      }
+
+      // Check if account is pending admin approval
+      if (user.status === 'pending_admin_approval') {
+        return reply.status(403).send(errorResponse('Your account is pending admin approval. Please wait for approval before logging in.'));
       }
 
       // Check if account is locked
