@@ -5,12 +5,18 @@ import { authenticateToken, requireAuth, requireMember } from '../../middlewares
 import { validateBody } from '../../middlewares/validation';
 import { successResponse, errorResponse } from '../../utils/response';
 import { config } from '../../config';
+import { getMembershipPrice } from '../../utils/settings';
 
 const initiatePaymentSchema = z.object({
   membership_type: z.enum(['basic', 'premium', 'lifetime']),
   referral_code: z.string().optional(),
 });
 
+const confirmManualSchema = z.object({
+  invoice_number: z.string(),
+});
+
+/* Paystack code commented out for now
 // Verify Paystack webhook signature
 function verifyPaystackSignature(payload: string, signature: string, secret: string): boolean {
   const crypto = require('crypto');
@@ -27,9 +33,25 @@ function getMembershipAmount(type: string): number {
   };
   return amounts[type] || 5000;
 }
+*/
 
 export default async function paymentRoutes(fastify: FastifyInstance) {
-  // POST /api/payments/initiate - Initiate a payment
+  
+  // GET /api/payments/details - Get payment details
+  fastify.get('/details', { preHandler: [authenticateToken, requireAuth] }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const amount = await getMembershipPrice();
+      return reply.send(successResponse({
+        amount,
+        bank: config.bank
+      }, 'Payment details retrieved'));
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.status(500).send(errorResponse('Failed to fetch payment details', error.message));
+    }
+  });
+
+  // POST /api/payments/initiate - Generate invoice for manual payment
   fastify.post('/initiate', { preHandler: [authenticateToken, requireAuth, validateBody(initiatePaymentSchema)] }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { membership_type, referral_code } = request.body as z.infer<typeof initiatePaymentSchema>;
@@ -55,16 +77,21 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         return reply.status(400).send(errorResponse('User already has an active membership'));
       }
 
-      const amount = getMembershipAmount(membership_type);
-      const reference = `NAB-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+      // Automatically read amount from settings
+      const amount = await getMembershipPrice();
+      
+      // Generate invoice number
+      const invoiceNumber = `INV-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
 
-      // Create pending transaction
+      // Create pending transaction for manual transfer
+      // Changed column names to match schema.sql: provider_payload_json, provider, type
       await query(
-        `INSERT INTO transactions (user_id, reference, amount, currency, status, metadata_json, payment_method, transaction_type)
-         VALUES ($1, $2, $3, 'NGN', 'pending', $4, 'paystack', 'membership')`,
-        [userId, reference, amount, JSON.stringify({ membership_type, referral_code: referral_code || null })]
+        `INSERT INTO transactions (user_id, reference, amount, currency, status, provider_payload_json, provider, type)
+         VALUES ($1, $2, $3, 'NGN', 'pending', $4, 'manual', 'membership')`,
+        [userId, invoiceNumber, amount, JSON.stringify({ membership_type, referral_code: referral_code || null, is_manual_transfer: true })]
       );
 
+      /*
       // Initialize Paystack transaction
       const response = await fetch('https://api.paystack.co/transaction/initialize', {
         method: 'POST',
@@ -75,7 +102,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         body: JSON.stringify({
           email: user.email,
           amount: amount * 100, // Paystack uses kobo
-          reference,
+          reference: invoiceNumber,
           callback_url: `${config.app.frontendUrl}/payment/verify`,
           metadata: {
             user_id: userId,
@@ -93,9 +120,16 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
 
       return reply.send(successResponse({
         authorization_url: paystackData.data!.authorization_url,
-        reference,
+        reference: invoiceNumber,
         access_code: paystackData.data!.access_code,
       }, 'Payment initiated'));
+      */
+
+      return reply.send(successResponse({
+        reference: invoiceNumber,
+        amount,
+        bank: config.bank
+      }, 'Invoice generated successfully'));
 
     } catch (error: any) {
       request.log.error(error);
@@ -103,136 +137,62 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // POST /api/payments/webhook/paystack - Paystack webhook
-  fastify.post('/webhook/paystack', async (request: FastifyRequest, reply: FastifyReply) => {
+  // POST /api/payments/confirm - Confirm manual transfer
+  fastify.post('/confirm', { preHandler: [authenticateToken, requireAuth, validateBody(confirmManualSchema)] }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const signature = request.headers['x-paystack-signature'] as string;
-      const payload = JSON.stringify(request.body);
+      const { invoice_number } = request.body as z.infer<typeof confirmManualSchema>;
+      const userId = request.user!.userId;
 
-      // Verify webhook signature
-      if (!verifyPaystackSignature(payload, signature, config.paystack.webhookSecret)) {
-        return reply.status(401).send(errorResponse('Invalid webhook signature'));
-      }
-
-      const event = request.body as any;
-
-      if (event.event === 'charge.success') {
-        const { reference, metadata, customer } = event.data;
-        const userId = metadata?.user_id;
-        const membershipType = metadata?.membership_type || 'basic';
-        const referralCode = metadata?.referral_code;
-
-        await transaction(async (client) => {
-          // Update transaction status
-          await client.query(
-            'UPDATE transactions SET status = $1, gateway_response_json = $2, paid_at = $3 WHERE reference = $4',
-            ['success', JSON.stringify(event.data), new Date().toISOString(), reference]
-          );
-
-          // Calculate membership expiry
-          const now = new Date();
-          let expiresAt = new Date();
-          if (membershipType === 'basic') {
-            expiresAt.setMonth(now.getMonth() + 1);
-          } else if (membershipType === 'premium') {
-            expiresAt.setMonth(now.getMonth() + 3);
-          } else {
-            expiresAt.setFullYear(now.getFullYear() + 100); // Lifetime
-          }
-
-          // Create or update membership
-          await client.query(
-            `INSERT INTO memberships (user_id, status, type, amount_paid, starts_at, expires_at)
-             VALUES ($1, $2, $3, $4, $5, $6)
-             ON CONFLICT (user_id) DO UPDATE SET
-               status = $2,
-               type = $3,
-               amount_paid = $4,
-               starts_at = $5,
-               expires_at = $6`,
-            [userId, 'active', membershipType, event.data.amount / 100, now.toISOString(), expiresAt.toISOString()]
-          );
-
-          // Update user role to member
-          await client.query(
-            "UPDATE users SET role = CASE WHEN role = 'guest' THEN 'member' ELSE role END, status = 'membership_active' WHERE id = $1",
-            [userId]
-          );
-
-          // Handle referral reward if applicable
-          if (referralCode) {
-            const referrer = await client.query(
-              'SELECT id FROM users WHERE referral_code = $1',
-              [referralCode]
-            );
-
-            if (referrer.rows[0]) {
-              // Update referral status to rewarded
-              await client.query(
-                "UPDATE referrals SET status = 'rewarded', rewarded_at = $1 WHERE referred_user_id = $2",
-                [new Date().toISOString(), userId]
-              );
-
-              // Credit referrer (simplified - you might want to add proper reward logic)
-              await client.query(
-                'UPDATE users SET referral_reward_balance = referral_reward_balance + 500 WHERE id = $1',
-                [referrer.rows[0].id]
-              );
-            }
-          }
-
-          // Create notification
-          await client.query(
-            'INSERT INTO notifications (user_id, type, title, body, data_json) VALUES ($1, $2, $3, $4, $5)',
-            [userId, 'membership_activated', 'Membership Activated', `Your ${membershipType} membership is now active.`, JSON.stringify({ membership_type: membershipType, reference })]
-          );
-        });
-      }
-
-      return reply.send({ received: true });
-
-    } catch (error: any) {
-      request.log.error(error);
-      return reply.status(500).send(errorResponse('Webhook processing failed', error.message));
-    }
-  });
-
-  // GET /api/payments/verify/:reference - Verify payment status
-  fastify.get('/verify/:reference', { preHandler: authenticateToken }, async (request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      const { reference } = request.params as { reference: string };
-
-      // Verify with Paystack
-      const response = await fetch(`https://api.paystack.co/transaction/verify/${reference}`, {
-        headers: {
-          Authorization: `Bearer ${config.paystack.secretKey}`,
-        },
-      });
-
-      const verifyData = await response.json() as { status: boolean; data?: { status: string; amount: number; paid_at: string; channel: string } };
-
-      if (!verifyData.status || !verifyData.data) {
-        return reply.status(400).send(errorResponse('Failed to verify payment'));
-      }
-
-      // Update local transaction
-      await query(
-        'UPDATE transactions SET status = $1, gateway_response_json = $2 WHERE reference = $3',
-        [verifyData.data!.status, JSON.stringify(verifyData.data), reference]
+      const existingTx = await queryOne<{ id: string; status: string; provider_payload_json: any }>(
+        'SELECT id, status, provider_payload_json FROM transactions WHERE reference = $1 AND user_id = $2',
+        [invoice_number, userId]
       );
 
-      return reply.send(successResponse({
-        status: verifyData.data!.status,
-        amount: verifyData.data!.amount / 100,
-        paid_at: verifyData.data!.paid_at,
-        channel: verifyData.data!.channel,
-      }));
+      if (!existingTx) {
+        return reply.status(404).send(errorResponse('Invoice not found'));
+      }
+
+      if (existingTx.status !== 'pending') {
+        return reply.status(400).send(errorResponse('This invoice has already been processed or cancelled'));
+      }
+
+      // Mark the transaction payload as user confirmed so admin knows they made the transfer
+      const updatedPayload = { ...existingTx.provider_payload_json, user_confirmed: true, confirmed_at: new Date().toISOString() };
+      
+      await query(
+        `UPDATE transactions SET provider_payload_json = $1 WHERE id = $2`,
+        [JSON.stringify(updatedPayload), existingTx.id]
+      );
+
+      // We could also notify the super admin here via email or db notification
+      await query(
+        `INSERT INTO notifications (user_id, type, title, body, data_json)
+         SELECT id, 'general', 'Manual Payment Pending', 'A user has confirmed a manual transfer. Invoice: ${invoice_number}', $1
+         FROM users WHERE role = 'super_admin'`,
+        [JSON.stringify({ invoice_number, user_id: userId })]
+      );
+
+      return reply.send(successResponse(null, 'Payment confirmation submitted. Please wait for super admin approval.'));
 
     } catch (error: any) {
       request.log.error(error);
-      return reply.status(500).send(errorResponse('Failed to verify payment', error.message));
+      return reply.status(500).send(errorResponse('Failed to confirm payment', error.message));
     }
   });
+
+  /* Paystack webhook commented out
+  // POST /api/payments/webhook/paystack - Paystack webhook
+  fastify.post('/webhook/paystack', async (request: FastifyRequest, reply: FastifyReply) => {
+    // ...
+  });
+  */
+
+  /* Verify payment commented out
+  // GET /api/payments/verify/:reference - Verify payment status
+  fastify.get('/verify/:reference', { preHandler: authenticateToken }, async (request: FastifyRequest, reply: FastifyReply) => {
+    // ...
+  });
+  */
 
   // GET /api/payments/history - Get user's payment history
   fastify.get('/history', { preHandler: [authenticateToken, requireAuth] }, async (request: FastifyRequest, reply: FastifyReply) => {

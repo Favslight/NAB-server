@@ -14,7 +14,7 @@ CREATE TYPE user_status AS ENUM ('pending_verification', 'verified', 'membership
 CREATE TYPE membership_plan_type AS ENUM ('standard_member');
 CREATE TYPE membership_status AS ENUM ('pending', 'active', 'expired', 'cancelled');
 CREATE TYPE transaction_type AS ENUM ('membership', 'course', 'event', 'other');
-CREATE TYPE transaction_provider AS ENUM ('paystack');
+CREATE TYPE transaction_provider AS ENUM ('paystack', 'manual');
 CREATE TYPE transaction_status AS ENUM ('pending', 'success', 'failed', 'abandoned');
 CREATE TYPE referral_status AS ENUM ('clicked', 'signed_up', 'paid', 'rewarded');
 CREATE TYPE post_visibility AS ENUM ('public', 'members', 'state_only');

@@ -28,6 +28,12 @@ export const config = {
     webhookSecret: process.env.PAYSTACK_WEBHOOK_SECRET || '',
   },
   
+  bank: {
+    accountName: process.env.BANK_ACCOUNT_NAME || 'AFRESH BIZ & ENT LTD',
+    accountNumber: process.env.BANK_ACCOUNT_NUMBER || '5080265397',
+    bankName: process.env.BANK_NAME || 'Fidelity bank',
+  },
+  
   cloudinary: {
     cloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
     apiKey: process.env.CLOUDINARY_API_KEY || '',

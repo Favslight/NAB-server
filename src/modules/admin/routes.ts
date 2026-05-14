@@ -43,6 +43,11 @@ const createCohortSchema = z.object({
   application_closes_at: z.string().datetime().optional(),
 });
 
+const paymentReviewSchema = z.object({
+  action: z.enum(['approve', 'reject']),
+  notes: z.string().optional(),
+});
+
 export default async function adminRoutes(fastify: FastifyInstance) {
   // GET /api/admin/dashboard - Admin dashboard stats
   fastify.get('/dashboard', { preHandler: [authenticateToken, requireStateAdmin] }, async (request: FastifyRequest, reply: FastifyReply) => {
@@ -510,6 +515,177 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     } catch (error: any) {
       request.log.error(error);
       return reply.status(500).send(errorResponse('Failed to update setting', error.message));
+    }
+  });
+
+  // GET /api/admin/payments - List payments (pending, success, failed)
+  fastify.get('/payments', { 
+    preHandler: [authenticateToken, requireSuperAdmin, validateQuery(paginationSchema.extend({ status: z.enum(['pending', 'success', 'failed']).optional() }))] 
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { page, limit, status } = request.query as any;
+
+      let statusFilter = '';
+      let countFilter = '';
+      const params: any[] = [limit, (page - 1) * limit];
+      const countParams: any[] = [];
+
+      if (status) {
+        statusFilter = 'WHERE t.status = $3';
+        countFilter = 'WHERE status = $1';
+        params.push(status);
+        countParams.push(status);
+      }
+
+      const payments = await query(
+        `SELECT t.*, u.full_name as user_name, u.email as user_email
+         FROM transactions t
+         JOIN users u ON t.user_id = u.id
+         ${statusFilter}
+         ORDER BY t.created_at DESC
+         LIMIT $1 OFFSET $2`,
+        params
+      );
+
+      const countResult = await queryOne<{ count: number }>(
+        `SELECT COUNT(*)::int as count FROM transactions t ${countFilter}`,
+        countParams
+      );
+
+      return reply.send(paginatedResponse(payments || [], countResult?.count || 0, page, limit));
+
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.status(500).send(errorResponse('Failed to fetch payments', error.message));
+    }
+  });
+
+  // POST /api/admin/payments/:id/review - Approve or reject a manual payment
+  fastify.post('/payments/:id/review', { 
+    preHandler: [authenticateToken, requireSuperAdmin, validateBody(paymentReviewSchema)] 
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const { action, notes } = request.body as z.infer<typeof paymentReviewSchema>;
+      const adminId = request.user!.userId;
+
+      const transactionData = await queryOne<{ id: string; user_id: string; status: string; amount: number; provider_payload_json: any; reference: string }>(
+        'SELECT * FROM transactions WHERE id = $1',
+        [id]
+      );
+
+      if (!transactionData) {
+        return reply.status(404).send(errorResponse('Transaction not found'));
+      }
+
+      if (transactionData.status !== 'pending') {
+        return reply.status(400).send(errorResponse(`Transaction is already ${transactionData.status}`));
+      }
+
+      const payload = transactionData.provider_payload_json || {};
+      const membershipType = payload.membership_type || 'basic';
+      const referralCode = payload.referral_code;
+      const userId = transactionData.user_id;
+      const amount = transactionData.amount;
+
+      if (action === 'approve') {
+        // Approve payment
+        await query(
+          'UPDATE transactions SET status = $1, paid_at = $2, provider_payload_json = jsonb_set(COALESCE(provider_payload_json::jsonb, \'{}\'), \'{admin_notes}\', $3) WHERE id = $4',
+          ['success', new Date().toISOString(), JSON.stringify(notes || ''), id]
+        );
+
+        // Calculate membership expiry
+        const now = new Date();
+        let expiresAt = new Date();
+        if (membershipType === 'basic') {
+          expiresAt.setMonth(now.getMonth() + 1);
+        } else if (membershipType === 'premium') {
+          expiresAt.setMonth(now.getMonth() + 3);
+        } else {
+          expiresAt.setFullYear(now.getFullYear() + 100); // Lifetime
+        }
+
+        // Create or update membership
+        await query(
+          `INSERT INTO memberships (user_id, status, plan_type, amount_paid, starts_at, expires_at)
+           VALUES ($1, $2, 'standard_member', $3, $4, $5)
+           ON CONFLICT (user_id) DO UPDATE SET
+             status = $2,
+             plan_type = 'standard_member',
+             amount_paid = $3,
+             starts_at = $4,
+             expires_at = $5`,
+          [userId, 'active', amount, now.toISOString(), expiresAt.toISOString()]
+        );
+
+        // Update user role to member
+        await query(
+          "UPDATE users SET role = CASE WHEN role = 'guest' THEN 'member'::user_role ELSE role END, status = 'membership_active' WHERE id = $1",
+          [userId]
+        );
+
+        // Handle referral reward if applicable
+        if (referralCode) {
+          const referrer = await queryOne<{ id: string }>(
+            'SELECT id FROM users WHERE referral_code = $1',
+            [referralCode]
+          );
+
+          if (referrer) {
+            // Update referral status to rewarded
+            await query(
+              "UPDATE referrals SET status = 'rewarded', rewarded_at = $1 WHERE referred_user_id = $2",
+              [new Date().toISOString(), userId]
+            );
+
+            // Credit referrer
+            await query(
+              'UPDATE users SET referral_reward_balance = COALESCE(referral_reward_balance, 0) + 500 WHERE id = $1',
+              [referrer.id]
+            );
+          }
+        }
+
+        // Create notification
+        await query(
+          'INSERT INTO notifications (user_id, type, title, body, data_json) VALUES ($1, $2, $3, $4, $5)',
+          [userId, 'membership_activated', 'Payment Approved & Membership Activated', `Your manual payment has been approved. Your ${membershipType} membership is now active.`, JSON.stringify({ membership_type: membershipType, reference: transactionData.reference })]
+        );
+
+        // Log audit
+        await query(
+          'INSERT INTO admin_audit_logs (admin_user_id, action, entity_type, entity_id, new_values_json) VALUES ($1, $2, $3, $4, $5)',
+          [adminId, 'approve_payment', 'transaction', id, JSON.stringify({ notes })]
+        );
+
+        return reply.send(successResponse(null, 'Payment approved successfully'));
+
+      } else {
+        // Reject payment
+        await query(
+          'UPDATE transactions SET status = $1, provider_payload_json = jsonb_set(COALESCE(provider_payload_json::jsonb, \'{}\'), \'{admin_notes}\', $2) WHERE id = $3',
+          ['failed', JSON.stringify(notes || ''), id]
+        );
+
+        // Create notification
+        await query(
+          'INSERT INTO notifications (user_id, type, title, body, data_json) VALUES ($1, $2, $3, $4, $5)',
+          [userId, 'general', 'Payment Rejected', `Your manual payment (Invoice: ${transactionData.reference}) could not be verified and has been rejected. Notes: ${notes || 'No notes provided.'}`, JSON.stringify({ reference: transactionData.reference })]
+        );
+
+        // Log audit
+        await query(
+          'INSERT INTO admin_audit_logs (admin_user_id, action, entity_type, entity_id, new_values_json) VALUES ($1, $2, $3, $4, $5)',
+          [adminId, 'reject_payment', 'transaction', id, JSON.stringify({ notes })]
+        );
+
+        return reply.send(successResponse(null, 'Payment rejected'));
+      }
+
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.status(500).send(errorResponse('Failed to review payment', error.message));
     }
   });
 }
