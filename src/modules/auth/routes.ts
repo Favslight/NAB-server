@@ -21,10 +21,10 @@ const registerSchema = z.object({
 });
 
 const loginSchema = z.object({
-  email: z.string().email().optional(),
+  email: z.string().optional(),
   id_no: z.string().optional(),
   password: z.string().min(1),
-}).refine((data: { email?: string; id_no?: string }) => data.email || data.id_no, {
+}).refine((data) => data.email || data.id_no, {
   message: "Either email or id_no must be provided",
 });
 
@@ -223,19 +223,11 @@ export default async function authRoutes(fastify: FastifyInstance) {
     try {
       const data = request.body as z.infer<typeof loginSchema>;
 
-      // Find user by email or id_no
-      let sql = 'SELECT * FROM users WHERE ';
-      let params: any[] = [];
-
-      if (data.email) {
-        sql += 'email = $1';
-        params = [data.email];
-      } else if (data.id_no) {
-        sql += 'id_no = $1';
-        params = [data.id_no];
-      }
-
-      const user = await queryOne<User>(sql, params);
+      const identifier = data.email || data.id_no;
+      const user = await queryOne<User>(
+        'SELECT * FROM users WHERE email = $1 OR id_no = $1',
+        [identifier]
+      );
 
       if (!user) {
         return reply.status(401).send(errorResponse('Invalid credentials'));
