@@ -1,6 +1,5 @@
 // Plan hierarchy levels for comparison
 export const PLAN_LEVELS: Record<string, number> = {
-  'standard_member': 0,
   'ai_explorer': 1,
   'ai_builder': 2,
   'ai_product_founder': 3,
@@ -26,7 +25,6 @@ export function getPlanDisplayName(plan: string): string {
     'ai_explorer': 'AI Explorer',
     'ai_builder': 'AI Builder',
     'ai_product_founder': 'AI Product Founder',
-    'standard_member': 'Standard Member',
   };
   return names[plan] || plan;
 }

@@ -2,7 +2,7 @@
 
 export type UserRole = 'guest' | 'member' | 'premium_builder' | 'state_admin' | 'super_admin';
 export type UserStatus = 'pending_verification' | 'verified' | 'membership_inactive' | 'membership_active' | 'course_applicant' | 'course_enrolled' | 'suspended' | 'pending_admin_approval';
-export type MembershipPlanType = 'standard_member' | 'ai_explorer' | 'ai_builder' | 'ai_product_founder';
+export type MembershipPlanType = 'ai_explorer' | 'ai_builder' | 'ai_product_founder';
 export type DealAiSyncStatus = 'active' | 'sync_failed' | 'removed';
 export type MembershipStatus = 'pending' | 'active' | 'expired' | 'cancelled';
 export type TransactionType = 'membership' | 'course' | 'event' | 'other';

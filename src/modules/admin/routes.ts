@@ -816,7 +816,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       }
 
       const payload = transactionData.provider_payload_json || {};
-      const membershipType = payload.membership_type || 'basic';
+      const membershipType = payload.membership_type || 'ai_builder';
       const referralCode = payload.referral_code;
       const userId = transactionData.user_id;
       const amount = transactionData.amount;
