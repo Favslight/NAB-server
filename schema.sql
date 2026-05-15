@@ -23,6 +23,8 @@ CREATE TYPE program_status AS ENUM ('draft', 'open', 'in_progress', 'closed', 'c
 CREATE TYPE application_status AS ENUM ('pending', 'reviewing', 'accepted', 'rejected', 'waitlisted');
 CREATE TYPE product_status AS ENUM ('pending_review', 'approved', 'rejected', 'published', 'archived');
 CREATE TYPE notification_type AS ENUM ('membership_activated', 'referral_reward', 'training_update', 'product_approved', 'course_application', 'course_accepted', 'general');
+CREATE TYPE membership_plan_type AS ENUM ('standard_member', 'ai_explorer', 'ai_builder', 'ai_product_founder');
+CREATE TYPE deal_ai_sync_status AS ENUM ('active', 'sync_failed', 'removed');
 
 -- ============================================
 -- CORE TABLES
@@ -666,3 +668,122 @@ COMMENT ON TABLE trainings IS 'Available training courses';
 COMMENT ON TABLE products IS 'User-submitted AI products showcase';
 COMMENT ON TABLE notifications IS 'User notifications';
 COMMENT ON TABLE admin_audit_logs IS 'Admin action audit trail';
+
+-- ============================================
+-- AI LAUNCHPAD / TOOLS MODULE
+-- ============================================
+
+-- Tool categories
+CREATE TABLE tool_categories (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(100) UNIQUE NOT NULL,
+    slug VARCHAR(100) UNIQUE NOT NULL,
+    description TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX idx_tool_categories_slug ON tool_categories(slug);
+
+-- Tools table
+CREATE TABLE tools (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(255) NOT NULL,
+    slug VARCHAR(100) UNIQUE NOT NULL,
+    description TEXT,
+    icon TEXT,
+    category VARCHAR(100) REFERENCES tool_categories(slug) ON UPDATE CASCADE ON DELETE SET NULL,
+    required_plan membership_plan_type NOT NULL DEFAULT 'ai_explorer',
+    featured BOOLEAN DEFAULT FALSE,
+    active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX idx_tools_slug ON tools(slug);
+CREATE INDEX idx_tools_category ON tools(category);
+CREATE INDEX idx_tools_required_plan ON tools(required_plan);
+CREATE INDEX idx_tools_active ON tools(active);
+CREATE INDEX idx_tools_featured ON tools(featured);
+
+-- Deal.ai user sync tracking
+CREATE TABLE deal_ai_users (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+    deal_ai_email VARCHAR(255) NOT NULL,
+    current_role VARCHAR(100) NOT NULL,
+    synced_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    last_role_sync_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    status deal_ai_sync_status DEFAULT 'active',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX idx_deal_ai_users_user ON deal_ai_users(user_id);
+CREATE INDEX idx_deal_ai_users_email ON deal_ai_users(deal_ai_email);
+CREATE INDEX idx_deal_ai_users_status ON deal_ai_users(status);
+
+-- Tool launch logs
+CREATE TABLE tool_launch_logs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tool_id UUID NOT NULL REFERENCES tools(id) ON DELETE CASCADE,
+    launched_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    ip_address INET,
+    user_agent TEXT
+);
+
+CREATE INDEX idx_tool_launch_logs_user ON tool_launch_logs(user_id);
+CREATE INDEX idx_tool_launch_logs_tool ON tool_launch_logs(tool_id);
+CREATE INDEX idx_tool_launch_logs_launched ON tool_launch_logs(launched_at DESC);
+
+-- ============================================
+-- TOOLS SEED DATA
+-- ============================================
+
+-- Insert tool categories
+INSERT INTO tool_categories (name, slug, description) VALUES
+('Image & Video', 'image-video', 'AI-powered image and video creation tools'),
+('Audio & Voice', 'audio-voice', 'AI voice generation, music, and audio tools'),
+('Content & Copy', 'content-copy', 'AI writing, blogs, and copywriting tools'),
+('Business & Apps', 'business-apps', 'Business applications, CRMs, and productivity tools'),
+('Research & AI Agents', 'research-agents', 'Deep research, AI agents, and automation tools'),
+('Training & Courses', 'training-courses', 'Academy and learning management tools');
+
+-- Insert all tools
+INSERT INTO tools (name, slug, description, icon, category, required_plan, featured) VALUES
+-- AI Explorer tier (1 tool)
+('Hyperrealistic AI Images', 'hyperrealistic-ai-images', 'Generate stunning, photorealistic AI images with unprecedented detail and quality.', '🎨', 'image-video', 'ai_explorer', TRUE),
+
+-- AI Builder tier (+2 tools)
+('AI Videos', 'ai-videos', 'Create professional AI-generated videos for any purpose.', '🎬', 'image-video', 'ai_builder', TRUE),
+('AI Voice Over', 'ai-voice-over', 'Generate natural-sounding voiceovers in multiple languages and styles.', '🎙️', 'audio-voice', 'ai_builder', FALSE),
+
+-- AI Product Founder tier (all remaining tools)
+('AI Spokesperson', 'ai-spokesperson', 'Create realistic AI spokesperson videos for your brand or product.', '🧑‍💼', 'image-video', 'ai_product_founder', FALSE),
+('AI Movies', 'ai-movies', 'Produce full-length AI-generated movie content and cinematic experiences.', '🎥', 'image-video', 'ai_product_founder', FALSE),
+('AEO Funnels', 'aeo-funnels', 'Build high-converting AI-powered marketing funnels optimized for results.', '🔄', 'business-apps', 'ai_product_founder', FALSE),
+('Conversational Images', 'conversational-images', 'Create interactive conversational image experiences powered by AI.', '💬', 'image-video', 'ai_product_founder', FALSE),
+('AI Music Generator', 'ai-music-generator', 'Compose original music tracks using AI for any mood or genre.', '🎵', 'audio-voice', 'ai_product_founder', FALSE),
+('Audiobook Maker', 'audiobook-maker', 'Convert any written content into professional-quality audiobooks instantly.', '📚', 'audio-voice', 'ai_product_founder', FALSE),
+('Scroll-Stopping Ads', 'scroll-stopping-ads', 'Generate compelling ad creatives designed to capture attention instantly.', '📢', 'content-copy', 'ai_product_founder', FALSE),
+('Hero Images', 'hero-images', 'Create striking hero images for websites, landing pages, and marketing materials.', '🖼️', 'image-video', 'ai_product_founder', FALSE),
+('Logo Maker', 'logo-maker', 'Design professional logos and brand identities with AI assistance.', '✏️', 'image-video', 'ai_product_founder', FALSE),
+('Precision Image Model', 'precision-image-model', 'Fine-tune image generation with precision controls for exact outputs.', '🎯', 'image-video', 'ai_product_founder', FALSE),
+('Academy App Wizard', 'academy-app-wizard', 'Build your own branded academy application without coding.', '🏫', 'training-courses', 'ai_product_founder', FALSE),
+('Live Training Wizard', 'live-training-wizard', 'Set up and manage live training sessions and webinars effortlessly.', '📡', 'training-courses', 'ai_product_founder', FALSE),
+('External App Wizard', 'external-app-wizard', 'Connect and integrate external applications into your workflow seamlessly.', '🔌', 'business-apps', 'ai_product_founder', FALSE),
+('Deep Research', 'deep-research', 'Conduct comprehensive AI-powered research on any topic in minutes.', '🔬', 'research-agents', 'ai_product_founder', FALSE),
+('Humanizer', 'humanizer', 'Transform AI-generated text into natural, human-sounding content.', '🤝', 'content-copy', 'ai_product_founder', FALSE),
+('AI Image Editor', 'ai-image-editor', 'Edit and enhance images with powerful AI-driven tools and filters.', '🖌️', 'image-video', 'ai_product_founder', FALSE),
+('Super Agent', 'super-agent', 'Deploy autonomous AI agents to handle complex tasks and workflows.', '🤖', 'research-agents', 'ai_product_founder', FALSE),
+('ChatWizard', 'chatwizard', 'Build intelligent chatbots and conversational AI for your business.', '💭', 'research-agents', 'ai_product_founder', FALSE),
+('AEO Blogs', 'aeo-blogs', 'Generate SEO-optimized blog posts and articles that rank and convert.', '📝', 'content-copy', 'ai_product_founder', FALSE),
+('Movie Editor', 'movie-editor', 'Edit and produce professional-quality movies with AI-assisted tools.', '🎞️', 'image-video', 'ai_product_founder', FALSE),
+('AI Forms', 'ai-forms', 'Create intelligent forms that adapt to user responses in real time.', '📋', 'business-apps', 'ai_product_founder', FALSE),
+('Easy CRM', 'easy-crm', 'Manage customer relationships effortlessly with an AI-powered CRM system.', '📊', 'business-apps', 'ai_product_founder', FALSE),
+('Academies', 'academies', 'Launch and manage your own online academy with AI-enhanced learning tools.', '🎓', 'training-courses', 'ai_product_founder', FALSE),
+('Copywriters', 'copywriters', 'Generate high-converting copy for any medium with AI-powered writing assistants.', '✍️', 'content-copy', 'ai_product_founder', FALSE);
+
+COMMENT ON TABLE tool_categories IS 'Categories for AI Launchpad tools';
+COMMENT ON TABLE tools IS 'AI Launchpad tools — access controlled by membership plan';
+COMMENT ON TABLE deal_ai_users IS 'Tracks users synced to Deal.ai whitelabel system';
+COMMENT ON TABLE tool_launch_logs IS 'Audit log of every tool launch by a user';
+

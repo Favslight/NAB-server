@@ -23,6 +23,7 @@ const paginationSchema = z.object({
 
 const updateUserRoleSchema = z.object({
   role: z.enum(['guest', 'member', 'premium_builder', 'state_admin']),
+  reason: z.string().optional(), // optional admin note
 });
 
 const updateUserStatusSchema = z.object({
@@ -144,35 +145,266 @@ export default async function adminRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // PUT /api/admin/users/:id/role - Update user role (super admin only)
+  // PUT /api/admin/users/:id/role - Change any user's role (super admin only)
+  // When assigning state_admin, automatically demotes the existing state admin in that state.
   fastify.put('/users/:id/role', { 
     preHandler: [authenticateToken, requireSuperAdmin, validateBody(updateUserRoleSchema)] 
   }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { id } = request.params as { id: string };
-      const { role } = request.body as z.infer<typeof updateUserRoleSchema>;
+      const { role, reason } = request.body as z.infer<typeof updateUserRoleSchema>;
       const adminId = request.user!.userId;
 
-      const user = await queryOne(
-        'UPDATE users SET role = $1 WHERE id = $2 RETURNING *',
-        [role, id]
+      // Fetch target user
+      const targetUser = await queryOne<{ id: string; role: string; state_id: string | null; full_name: string; email: string }>(
+        'SELECT id, role, state_id, full_name, email FROM users WHERE id = $1',
+        [id]
       );
 
-      if (!user) {
+      if (!targetUser) {
         return reply.status(404).send(errorResponse('User not found'));
       }
 
-      // Log audit
-      await query(
-        'INSERT INTO admin_audit_logs (admin_user_id, action, entity_type, entity_id, new_values_json) VALUES ($1, $2, $3, $4, $5)',
-        [adminId, 'update_user_role', 'user', id, JSON.stringify({ role })]
+      // Prevent changing a super_admin's role through this endpoint
+      if (targetUser.role === 'super_admin') {
+        return reply.status(403).send(errorResponse('Cannot change the role of a super admin'));
+      }
+
+      // Prevent self-demotion
+      if (id === adminId) {
+        return reply.status(403).send(errorResponse('You cannot change your own role'));
+      }
+
+      let demotedUser: { id: string; full_name: string } | null = null;
+
+      // If promoting to state_admin, demote the current state_admin in that state first
+      if (role === 'state_admin') {
+        if (!targetUser.state_id) {
+          return reply.status(400).send(errorResponse('User does not belong to a state and cannot be assigned as state admin'));
+        }
+
+        const existingStateAdmin = await queryOne<{ id: string; full_name: string }>(
+          "SELECT id, full_name FROM users WHERE state_id = $1 AND role = 'state_admin' AND id != $2",
+          [targetUser.state_id, id]
+        );
+
+        if (existingStateAdmin) {
+          // Demote current state admin to member
+          await query(
+            "UPDATE users SET role = 'member' WHERE id = $1",
+            [existingStateAdmin.id]
+          );
+
+          // Notify the demoted user
+          await query(
+            'INSERT INTO notifications (user_id, type, title, body) VALUES ($1, $2, $3, $4)',
+            [
+              existingStateAdmin.id,
+              'general',
+              'Role Updated',
+              `Your state admin role has been reassigned. You are now a member.${reason ? ' Note: ' + reason : ''}`
+            ]
+          );
+
+          // Audit for demotion
+          await query(
+            'INSERT INTO admin_audit_logs (admin_user_id, action, entity_type, entity_id, new_values_json) VALUES ($1, $2, $3, $4, $5)',
+            [adminId, 'demote_state_admin', 'user', existingStateAdmin.id, JSON.stringify({ role: 'member', reason, replaced_by: id })]
+          );
+
+          demotedUser = existingStateAdmin;
+        }
+      }
+
+      // Apply the new role to the target user
+      const updatedUser = await queryOne<{ id: string; role: string; full_name: string }>(
+        'UPDATE users SET role = $1 WHERE id = $2 RETURNING id, role, full_name, email, state_id',
+        [role, id]
       );
 
-      return reply.send(successResponse(user, 'User role updated'));
+      // Notify the promoted/updated user
+      await query(
+        'INSERT INTO notifications (user_id, type, title, body) VALUES ($1, $2, $3, $4)',
+        [
+          id,
+          'general',
+          'Your Role Has Been Updated',
+          `Your account role has been changed to: ${role.replace('_', ' ')}.${reason ? ' Note: ' + reason : ''}`
+        ]
+      );
+
+      // Audit for promotion
+      await query(
+        'INSERT INTO admin_audit_logs (admin_user_id, action, entity_type, entity_id, new_values_json) VALUES ($1, $2, $3, $4, $5)',
+        [adminId, 'update_user_role', 'user', id, JSON.stringify({ role, reason, previous_role: targetUser.role })]
+      );
+
+      return reply.send(successResponse({
+        user: updatedUser,
+        demoted: demotedUser ? { id: demotedUser.id, name: demotedUser.full_name, newRole: 'member' } : null,
+      }, `User role updated to ${role}${ demotedUser ? `. Previous state admin (${demotedUser.full_name}) has been demoted to member.` : '' }`));
 
     } catch (error: any) {
       request.log.error(error);
       return reply.status(500).send(errorResponse('Failed to update role', error.message));
+    }
+  });
+
+  // POST /api/admin/users/:id/assign-state-admin
+  // Dedicated endpoint to promote a user to state_admin and auto-demote the existing one
+  fastify.post('/users/:id/assign-state-admin', { 
+    preHandler: [authenticateToken, requireSuperAdmin] 
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const { reason } = (request.body || {}) as { reason?: string };
+      const adminId = request.user!.userId;
+
+      const targetUser = await queryOne<{ id: string; role: string; state_id: string | null; full_name: string; email: string }>(
+        'SELECT id, role, state_id, full_name, email FROM users WHERE id = $1',
+        [id]
+      );
+
+      if (!targetUser) {
+        return reply.status(404).send(errorResponse('User not found'));
+      }
+
+      if (targetUser.role === 'super_admin') {
+        return reply.status(403).send(errorResponse('Cannot change the role of a super admin'));
+      }
+
+      if (!targetUser.state_id) {
+        return reply.status(400).send(errorResponse('This user does not belong to any state. Assign them to a state first.'));
+      }
+
+      if (targetUser.role === 'state_admin') {
+        return reply.status(400).send(errorResponse('This user is already a state admin'));
+      }
+
+      // Find and demote existing state admin in the same state
+      const existingAdmin = await queryOne<{ id: string; full_name: string; email: string }>(
+        "SELECT id, full_name, email FROM users WHERE state_id = $1 AND role = 'state_admin' AND id != $2",
+        [targetUser.state_id, id]
+      );
+
+      if (existingAdmin) {
+        await query("UPDATE users SET role = 'member' WHERE id = $1", [existingAdmin.id]);
+
+        await query(
+          'INSERT INTO notifications (user_id, type, title, body) VALUES ($1, $2, $3, $4)',
+          [
+            existingAdmin.id, 'general',
+            'State Admin Role Reassigned',
+            `Your state admin role has been transferred to ${targetUser.full_name}.${reason ? ' Note: ' + reason : ''}`
+          ]
+        );
+
+        await query(
+          'INSERT INTO admin_audit_logs (admin_user_id, action, entity_type, entity_id, new_values_json) VALUES ($1, $2, $3, $4, $5)',
+          [adminId, 'demote_state_admin', 'user', existingAdmin.id, JSON.stringify({ new_role: 'member', replaced_by: id, reason })]
+        );
+      }
+
+      // Promote target user
+      await query("UPDATE users SET role = 'state_admin' WHERE id = $1", [id]);
+
+      await query(
+        'INSERT INTO notifications (user_id, type, title, body) VALUES ($1, $2, $3, $4)',
+        [
+          id, 'general',
+          'You Are Now a State Admin 🎉',
+          `You have been promoted to State Admin for your state.${reason ? ' Note: ' + reason : ''}`
+        ]
+      );
+
+      await query(
+        'INSERT INTO admin_audit_logs (admin_user_id, action, entity_type, entity_id, new_values_json) VALUES ($1, $2, $3, $4, $5)',
+        [adminId, 'assign_state_admin', 'user', id, JSON.stringify({ role: 'state_admin', reason, demoted_user: existingAdmin?.id || null })]
+      );
+
+      return reply.send(successResponse({
+        promoted: { id: targetUser.id, name: targetUser.full_name, newRole: 'state_admin' },
+        demoted: existingAdmin ? { id: existingAdmin.id, name: existingAdmin.full_name, newRole: 'member' } : null,
+      }, `${targetUser.full_name} is now the state admin.${ existingAdmin ? ` ${existingAdmin.full_name} has been demoted to member.` : '' }`));
+
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.status(500).send(errorResponse('Failed to assign state admin', error.message));
+    }
+  });
+
+  // POST /api/admin/users/:id/remove-state-admin
+  // Removes state_admin role from a user and demotes them to member
+  fastify.post('/users/:id/remove-state-admin', { 
+    preHandler: [authenticateToken, requireSuperAdmin] 
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const { reason } = (request.body || {}) as { reason?: string };
+      const adminId = request.user!.userId;
+
+      const targetUser = await queryOne<{ id: string; role: string; state_id: string | null; full_name: string }>(
+        'SELECT id, role, state_id, full_name FROM users WHERE id = $1',
+        [id]
+      );
+
+      if (!targetUser) {
+        return reply.status(404).send(errorResponse('User not found'));
+      }
+
+      if (targetUser.role !== 'state_admin') {
+        return reply.status(400).send(errorResponse('This user is not a state admin'));
+      }
+
+      // Demote to member
+      await query("UPDATE users SET role = 'member' WHERE id = $1", [id]);
+
+      // Notify the user
+      await query(
+        'INSERT INTO notifications (user_id, type, title, body) VALUES ($1, $2, $3, $4)',
+        [
+          id, 'general',
+          'State Admin Role Removed',
+          `Your state admin role has been removed. You are now a standard member.${reason ? ' Reason: ' + reason : ''}`
+        ]
+      );
+
+      // Audit
+      await query(
+        'INSERT INTO admin_audit_logs (admin_user_id, action, entity_type, entity_id, new_values_json) VALUES ($1, $2, $3, $4, $5)',
+        [adminId, 'remove_state_admin', 'user', id, JSON.stringify({ previous_role: 'state_admin', new_role: 'member', reason })]
+      );
+
+      return reply.send(successResponse(
+        { id: targetUser.id, name: targetUser.full_name, newRole: 'member' },
+        `${targetUser.full_name} has been removed as state admin and is now a member`
+      ));
+
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.status(500).send(errorResponse('Failed to remove state admin', error.message));
+    }
+  });
+
+  // GET /api/admin/state-admins - List all current state admins (super admin only)
+  fastify.get('/state-admins', { 
+    preHandler: [authenticateToken, requireSuperAdmin] 
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const admins = await query(
+        `SELECT u.id, u.full_name, u.email, u.id_no, u.created_at,
+                s.name as state_name, s.slug as state_slug, s.id as state_id
+         FROM users u
+         LEFT JOIN states s ON u.state_id = s.id
+         WHERE u.role = 'state_admin'
+         ORDER BY s.name ASC`
+      );
+
+      return reply.send(successResponse(admins || [], `${(admins || []).length} state admin(s) found`));
+
+    } catch (error: any) {
+      request.log.error(error);
+      return reply.status(500).send(errorResponse('Failed to fetch state admins', error.message));
     }
   });
 

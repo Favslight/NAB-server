@@ -19,6 +19,7 @@ import programRoutes from './modules/program/routes';
 import productRoutes from './modules/products/routes';
 import notificationRoutes from './modules/notifications/routes';
 import adminRoutes from './modules/admin/routes';
+import toolRoutes from './modules/tools/routes';
 
 async function buildServer(): Promise<FastifyInstance> {
   const fastify = Fastify({
@@ -101,6 +102,7 @@ async function buildServer(): Promise<FastifyInstance> {
   await fastify.register(productRoutes, { prefix: '/api/products' });
   await fastify.register(notificationRoutes, { prefix: '/api/notifications' });
   await fastify.register(adminRoutes, { prefix: '/api/admin' });
+  await fastify.register(toolRoutes, { prefix: '/api/tools' });
 
   // Global error handler
   fastify.setErrorHandler((error: FastifyError, request, reply) => {

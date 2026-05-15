@@ -2,7 +2,8 @@
 
 export type UserRole = 'guest' | 'member' | 'premium_builder' | 'state_admin' | 'super_admin';
 export type UserStatus = 'pending_verification' | 'verified' | 'membership_inactive' | 'membership_active' | 'course_applicant' | 'course_enrolled' | 'suspended' | 'pending_admin_approval';
-export type MembershipPlanType = 'standard_member';
+export type MembershipPlanType = 'standard_member' | 'ai_explorer' | 'ai_builder' | 'ai_product_founder';
+export type DealAiSyncStatus = 'active' | 'sync_failed' | 'removed';
 export type MembershipStatus = 'pending' | 'active' | 'expired' | 'cancelled';
 export type TransactionType = 'membership' | 'course' | 'event' | 'other';
 export type TransactionStatus = 'pending' | 'success' | 'failed' | 'abandoned';
@@ -279,4 +280,49 @@ export interface ApiResponse<T = any> {
     total?: number;
     totalPages?: number;
   };
+}
+
+// ============================================
+// AI LAUNCHPAD / TOOLS MODULE TYPES
+// ============================================
+
+export interface ToolCategory {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  created_at: string;
+}
+
+export interface Tool {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  icon: string | null;
+  category: string | null;
+  required_plan: MembershipPlanType;
+  featured: boolean;
+  active: boolean;
+  created_at: string;
+}
+
+export interface DealAiUser {
+  id: string;
+  user_id: string;
+  deal_ai_email: string;
+  current_role: string;
+  synced_at: string;
+  last_role_sync_at: string;
+  status: DealAiSyncStatus;
+  created_at: string;
+}
+
+export interface ToolLaunchLog {
+  id: string;
+  user_id: string;
+  tool_id: string;
+  launched_at: string;
+  ip_address: string | null;
+  user_agent: string | null;
 }

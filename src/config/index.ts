@@ -33,6 +33,12 @@ export const config = {
     accountNumber: process.env.BANK_ACCOUNT_NUMBER || '5080265397',
     bankName: process.env.BANK_NAME || 'Fidelity bank',
   },
+
+  dealAi: {
+    apiKey: process.env.DEAL_AI_API_KEY || '',
+    baseUrl: process.env.DEAL_AI_BASE_URL || 'https://api.marketing.deal.ai/api/2024-01',
+    launchUrl: process.env.DEAL_AI_LAUNCH_URL || 'https://tools.aibuilders.ng',
+  },
   
   cloudinary: {
     cloudName: process.env.CLOUDINARY_CLOUD_NAME || '',

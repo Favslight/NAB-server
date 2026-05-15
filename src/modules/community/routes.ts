@@ -43,11 +43,25 @@ export default async function communityRoutes(fastify: FastifyInstance) {
       const params: any[] = [];
       let paramIndex = 0;
 
-      if (hub_id) {
+      let effectiveHubId = hub_id;
+      
+      // If no hub_id provided and user is authenticated (and not super admin), 
+      // default to their state's hub
+      if (!effectiveHubId && request.user && request.user.role !== 'super_admin' && request.user.stateId) {
+        const userHub = await queryOne<{ id: string }>(
+          'SELECT id FROM state_hubs WHERE state_id = $1',
+          [request.user.stateId]
+        );
+        if (userHub) {
+          effectiveHubId = userHub.id;
+        }
+      }
+
+      if (effectiveHubId) {
         paramIndex++;
         sql += ` AND p.hub_id = $${paramIndex}`;
         countSql += ` AND hub_id = $${paramIndex}`;
-        params.push(hub_id);
+        params.push(effectiveHubId);
       }
 
       if (post_type) {
@@ -141,6 +155,17 @@ export default async function communityRoutes(fastify: FastifyInstance) {
         data = validationResult.data;
       }
 
+      // Automatically assign hub_id if not provided, based on user's state
+      if (!data.hub_id && request.user!.stateId) {
+        const userHub = await queryOne<{ id: string }>(
+          'SELECT id FROM state_hubs WHERE state_id = $1',
+          [request.user!.stateId]
+        );
+        if (userHub) {
+          data.hub_id = userHub.id;
+        }
+      }
+
       const post = await queryOne(
         `INSERT INTO community_posts (author_user_id, hub_id, category, title, body, media_files)
          VALUES ($1, $2, $3, $4, $5, $6)
@@ -180,6 +205,18 @@ export default async function communityRoutes(fastify: FastifyInstance) {
 
       if (!post) {
         return reply.status(404).send(errorResponse('Post not found'));
+      }
+
+      // Check visibility: if post belongs to a hub, user must be in that state (unless super admin)
+      if (request.user && request.user.role !== 'super_admin' && (post as any).hub_id) {
+        const userHub = await queryOne<{ id: string }>(
+          'SELECT id FROM state_hubs WHERE state_id = $1',
+          [request.user.stateId]
+        );
+        
+        if (!userHub || userHub.id !== (post as any).hub_id) {
+          return reply.status(403).send(errorResponse('This post belongs to another state and is not accessible to you.'));
+        }
       }
 
       // Increment view count
