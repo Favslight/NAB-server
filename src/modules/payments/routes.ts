@@ -8,8 +8,8 @@ import { config } from '../../config';
 import { getMembershipPrice } from '../../utils/settings';
 
 const initiatePaymentSchema = z.object({
-  membership_type: z.enum(['basic', 'premium', 'lifetime']),
-  referral_code: z.string().optional(),
+  membership_type: z.enum(['basic', 'premium', 'lifetime', 'standard_member', 'ai_explorer', 'ai_builder', 'ai_product_founder']),
+  referral_code: z.string().nullable().optional(),
 });
 
 const confirmManualSchema = z.object({
@@ -73,8 +73,17 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         [userId, 'active']
       );
 
+      // If user is already membership_active in users table AND has a role other than guest, 
+      // we should probably still allow them to pay if they don't have a membership record, 
+      // but let's be careful.
       if (existingMembership) {
         return reply.status(400).send(errorResponse('User already has an active membership'));
+      }
+
+      // If user is already active but trying to pay, maybe they are upgrading?
+      // For now, let's just log it if they are already active.
+      if (user.status === 'membership_active' && !existingMembership && user.role !== 'super_admin') {
+         // Maybe they are active but record is missing? We'll allow them to proceed to fix their state.
       }
 
       // Automatically read amount from settings
