@@ -5,6 +5,7 @@ import { User } from '../../database/types';
 import { authenticateToken, requireSuperAdmin, requireStateAdmin } from '../../middlewares/auth';
 import { validateBody, validateQuery } from '../../middlewares/validation';
 import { successResponse, paginatedResponse, errorResponse } from '../../utils/response';
+import { sendEmail } from '../../utils/email';
 
 // Helper to build state filter for state admins
 function getStateFilter(request: FastifyRequest): { clause: string; param: string | null } {
@@ -569,8 +570,8 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       const { action, notes } = request.body as z.infer<typeof paymentReviewSchema>;
       const adminId = request.user!.userId;
 
-      const transactionData = await queryOne<{ id: string; user_id: string; status: string; amount: number; provider_payload_json: any; reference: string }>(
-        'SELECT * FROM transactions WHERE id = $1',
+      const transactionData = await queryOne<{ id: string; user_id: string; status: string; amount: number; provider_payload_json: any; reference: string; user_email: string; user_name: string }>(
+        'SELECT t.*, u.email as user_email, u.full_name as user_name FROM transactions t JOIN users u ON t.user_id = u.id WHERE t.id = $1',
         [id]
       );
 
@@ -659,6 +660,24 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           [adminId, 'approve_payment', 'transaction', id, JSON.stringify({ notes })]
         );
 
+        // Send Email
+        if (transactionData.user_email) {
+          await sendEmail({
+            to: transactionData.user_email,
+            subject: 'Payment Approved - Membership Activated',
+            html: `
+              <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+                <h2>Congratulations, ${transactionData.user_name}!</h2>
+                <p>Your manual payment of ₦${amount} for the ${membershipType} membership has been approved.</p>
+                <p>Your membership is now active. You can log in and access your dashboard.</p>
+                <p>Invoice Reference: <strong>${transactionData.reference}</strong></p>
+                <br/>
+                <p>Thank you,<br/>Nigerian AI Builders Team</p>
+              </div>
+            `
+          }).catch(err => request.log.error('Failed to send approval email', err));
+        }
+
         return reply.send(successResponse(null, 'Payment approved successfully'));
 
       } else {
@@ -679,6 +698,26 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           'INSERT INTO admin_audit_logs (admin_user_id, action, entity_type, entity_id, new_values_json) VALUES ($1, $2, $3, $4, $5)',
           [adminId, 'reject_payment', 'transaction', id, JSON.stringify({ notes })]
         );
+
+        // Send Email
+        if (transactionData.user_email) {
+          await sendEmail({
+            to: transactionData.user_email,
+            subject: 'Payment Verification Failed',
+            html: `
+              <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+                <h2>Hello ${transactionData.user_name},</h2>
+                <p>We could not verify your manual payment for invoice <strong>${transactionData.reference}</strong>.</p>
+                <p><strong>Admin Notes:</strong> ${notes || 'No specific notes provided.'}</p>
+                <p style="padding: 15px; background: #fff3f3; border-left: 4px solid #ff4d4f;">
+                  Please contact us at <strong>08104880331</strong> for assistance and to resolve this issue.
+                </p>
+                <br/>
+                <p>Thank you,<br/>Nigerian AI Builders Team</p>
+              </div>
+            `
+          }).catch(err => request.log.error('Failed to send rejection email', err));
+        }
 
         return reply.send(successResponse(null, 'Payment rejected'));
       }
