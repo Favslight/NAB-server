@@ -67,22 +67,13 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         return reply.status(404).send(errorResponse('User not found'));
       }
 
-      // Check if user already has an active membership
-      const existingMembership = await queryOne(
-        'SELECT id FROM memberships WHERE user_id = $1 AND status = $2 AND expires_at > NOW()',
-        [userId, 'active']
-      );
-
-      // If user is already membership_active in users table AND has a role other than guest, 
-      // we should probably still allow them to pay if they don't have a membership record, 
-      // but let's be careful.
-      if (existingMembership) {
-        return reply.status(400).send(errorResponse('User already has an active membership'));
+      // Check if user already has an active membership in the users table
+      if (user.status === 'membership_active') {
+        return reply.status(400).send(errorResponse('You already have an active membership.'));
       }
 
       // If user is already active but trying to pay, maybe they are upgrading?
-      // For now, let's just log it if they are already active.
-      if (user.status === 'membership_active' && !existingMembership && user.role !== 'super_admin') {
+      if (user.status === 'membership_active' && user.role !== 'super_admin') {
          // Maybe they are active but record is missing? We'll allow them to proceed to fix their state.
       }
 

@@ -78,12 +78,6 @@ export default async function userRoutes(fastify: FastifyInstance) {
         return reply.status(404).send(errorResponse('User not found'));
       }
 
-      // Get active membership
-      const membership = await queryOne(
-        'SELECT * FROM memberships WHERE user_id = $1 AND status = $2',
-        [user.id, 'active']
-      );
-
       // Get referral stats
       const referralStats = await queryOne(
         `SELECT 
@@ -96,9 +90,9 @@ export default async function userRoutes(fastify: FastifyInstance) {
 
       return reply.send(successResponse({
         ...user,
-        membership_status: membership?.status || 'inactive',
-        membership_expires_at: membership?.expires_at || null,
-        membership: membership || null,
+        membership_status: user.status === 'membership_active' ? 'active' : (user.status === 'pending_admin_approval' ? 'pending' : 'inactive'),
+        membership_plan_type: user.membership_plan_type || 'standard_member',
+        membership_expires_at: user.membership_expires_at || null,
         referral_stats: referralStats,
       }));
 

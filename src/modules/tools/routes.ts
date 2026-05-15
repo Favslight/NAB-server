@@ -47,13 +47,14 @@ export default async function toolRoutes(fastify: FastifyInstance) {
     try {
       const userId = request.user!.userId;
 
-      // Fetch user's active membership plan
-      const membership = await queryOne<{ plan_type: string }>(
-        "SELECT plan_type FROM memberships WHERE user_id = $1 AND status = 'active' ORDER BY created_at DESC LIMIT 1",
+      // Fetch user's active membership plan from users table
+      const user = await queryOne<{ status: string, membership_plan_type: string }>(
+        "SELECT status, membership_plan_type FROM users WHERE id = $1",
         [userId]
       );
 
-      const tools = await getAllTools(membership?.plan_type || null);
+      const userPlan = user?.status === 'membership_active' ? (user.membership_plan_type || 'standard_member') : null;
+      const tools = await getAllTools(userPlan);
       return reply.send(successResponse(tools));
 
     } catch (error: any) {
@@ -90,16 +91,16 @@ export default async function toolRoutes(fastify: FastifyInstance) {
     try {
       const userId = request.user!.userId;
 
-      const membership = await queryOne<{ plan_type: string }>(
-        "SELECT plan_type FROM memberships WHERE user_id = $1 AND status = 'active' ORDER BY created_at DESC LIMIT 1",
+      const user = await queryOne<{ status: string, membership_plan_type: string }>(
+        "SELECT status, membership_plan_type FROM users WHERE id = $1",
         [userId]
       );
 
-      if (!membership) {
+      if (!user || user.status !== 'membership_active') {
         return reply.send(successResponse([], 'No active membership — no tools accessible'));
       }
 
-      const tools = await getMyAccessTools(membership.plan_type);
+      const tools = await getMyAccessTools(user.membership_plan_type || 'standard_member');
       return reply.send(successResponse(tools));
 
     } catch (error: any) {
@@ -120,34 +121,36 @@ export default async function toolRoutes(fastify: FastifyInstance) {
         return reply.status(404).send(errorResponse('Tool not found'));
       }
 
-      // 2. Fetch user's active membership
-      const membership = await queryOne<{ plan_type: string }>(
-        "SELECT plan_type FROM memberships WHERE user_id = $1 AND status = 'active' ORDER BY created_at DESC LIMIT 1",
+      // 2. Fetch user's active membership from users table
+      const user = await queryOne<{ status: string, membership_plan_type: string }>(
+        "SELECT status, membership_plan_type FROM users WHERE id = $1",
         [userId]
       );
 
-      if (!membership) {
+      if (!user || user.status !== 'membership_active') {
         return reply.status(403).send(errorResponse('No active membership. Please upgrade your plan to access AI tools.'));
       }
 
+      const userPlan = user.membership_plan_type || 'standard_member';
+
       // 3. Check tool access
-      if (!canAccessTool(membership.plan_type, tool.required_plan)) {
-        return reply.status(403).send(errorResponse(`Your current plan (${membership.plan_type}) does not include access to ${tool.name}. Please upgrade.`));
+      if (!canAccessTool(userPlan, tool.required_plan)) {
+        return reply.status(403).send(errorResponse(`Your current plan (${userPlan}) does not include access to ${tool.name}. Please upgrade.`));
       }
 
       // 4. Fetch full user for Deal.ai sync
-      const user = await queryOne<{ id: string; email: string; full_name: string }>(
+      const fullUser = await queryOne<{ id: string; email: string; full_name: string }>(
         'SELECT id, email, full_name FROM users WHERE id = $1',
         [userId]
       );
 
-      if (!user || !user.email) {
+      if (!fullUser || !fullUser.email) {
         return reply.status(400).send(errorResponse('User email is required to launch tools'));
       }
 
       // 5. Ensure user is synced to Deal.ai (create or update role)
       try {
-        await ensureUserSyncedToDealAi(userId, user.email, user.full_name, membership.plan_type);
+        await ensureUserSyncedToDealAi(userId, fullUser.email, fullUser.full_name, userPlan);
       } catch (syncError: any) {
         // Mark sync as failed — don't block the launch if Deal.ai is unreachable
         request.log.error('Deal.ai sync failed for user ' + userId + ': ' + syncError.message);

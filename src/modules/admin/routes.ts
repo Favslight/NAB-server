@@ -828,34 +828,35 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           ['success', new Date().toISOString(), JSON.stringify(notes || ''), id]
         );
 
-        // Calculate membership expiry
+        // All plans are now lifetime (No expiration)
         const now = new Date();
         let expiresAt = new Date();
-        if (membershipType === 'basic') {
-          expiresAt.setMonth(now.getMonth() + 1);
-        } else if (membershipType === 'premium') {
-          expiresAt.setMonth(now.getMonth() + 3);
-        } else {
-          expiresAt.setFullYear(now.getFullYear() + 100); // Lifetime
-        }
+        expiresAt.setFullYear(now.getFullYear() + 100); 
 
-        // Create or update membership
+        // Update User directly (Single source of truth)
         await query(
-          `INSERT INTO memberships (user_id, status, plan_type, amount_paid, starts_at, expires_at)
-           VALUES ($1, $2, 'standard_member', $3, $4, $5)
-           ON CONFLICT (user_id) DO UPDATE SET
-             status = $2,
-             plan_type = 'standard_member',
-             amount_paid = $3,
-             starts_at = $4,
-             expires_at = $5`,
-          [userId, 'active', amount, now.toISOString(), expiresAt.toISOString()]
+          `UPDATE users SET 
+            status = 'membership_active', 
+            role = CASE WHEN role = 'guest' THEN 'member'::user_role ELSE role END,
+            membership_plan_type = $1, 
+            membership_expires_at = $2,
+            updated_at = NOW() 
+           WHERE id = $3`,
+          [membershipType, expiresAt.toISOString(), userId]
         );
 
-        // Update user role to member
+        // Create or update membership record (for history)
         await query(
-          "UPDATE users SET role = CASE WHEN role = 'guest' THEN 'member'::user_role ELSE role END, status = 'membership_active' WHERE id = $1",
-          [userId]
+          `INSERT INTO memberships (user_id, status, plan_type, amount_paid, starts_at, expires_at)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (user_id) DO UPDATE SET
+             status = $2,
+             plan_type = $3,
+             amount_paid = $4,
+             starts_at = $5,
+             expires_at = $6,
+             updated_at = NOW()`,
+          [userId, 'active', membershipType, amount, now.toISOString(), expiresAt.toISOString()]
         );
 
         // Handle referral reward if applicable
