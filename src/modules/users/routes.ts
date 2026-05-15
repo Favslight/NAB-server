@@ -91,7 +91,9 @@ export default async function userRoutes(fastify: FastifyInstance) {
       return reply.send(successResponse({
         ...user,
         membership_status: (user.status as any) === 'membership_active' ? 'active' : ((user.status as any) === 'pending_admin_approval' ? 'pending' : 'inactive'),
-        membership_plan_type: user.membership_plan_type || ((user.status as any) === 'membership_active' ? 'ai_builder' : 'ai_explorer'),
+        membership_plan_type: (user.membership_plan_type === 'ai_explorer' && (user.status as any) === 'membership_active') 
+          ? 'ai_builder' 
+          : (user.membership_plan_type || ((user.status as any) === 'membership_active' ? 'ai_builder' : 'ai_explorer')),
         membership_expires_at: user.membership_expires_at || null,
         referral_stats: referralStats,
       }));

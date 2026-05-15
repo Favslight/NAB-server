@@ -53,9 +53,14 @@ export default async function toolRoutes(fastify: FastifyInstance) {
         [userId]
       );
 
-      const userPlan = user?.status === 'membership_active' 
+      let userPlan = user?.status === 'membership_active' 
         ? (user.membership_plan_type || 'ai_builder') 
         : (user?.status === 'verified' || user?.status === 'pending_verification' ? 'ai_explorer' : null);
+
+      // Override if they are active but stuck on explorer default
+      if (userPlan === 'ai_explorer' && user?.status === 'membership_active') {
+        userPlan = 'ai_builder';
+      }
       const tools = await getAllTools(userPlan);
       return reply.send(successResponse(tools));
 
@@ -133,7 +138,10 @@ export default async function toolRoutes(fastify: FastifyInstance) {
         return reply.status(403).send(errorResponse('No active membership. Please upgrade your plan to access AI tools.'));
       }
 
-      const userPlan = user.membership_plan_type || 'ai_builder';
+      let userPlan = user.membership_plan_type || 'ai_builder';
+      if (userPlan === 'ai_explorer' && user.status === 'membership_active') {
+        userPlan = 'ai_builder';
+      }
 
       // 3. Check tool access
       if (!canAccessTool(userPlan, tool.required_plan)) {
