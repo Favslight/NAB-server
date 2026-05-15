@@ -224,8 +224,11 @@ export default async function authRoutes(fastify: FastifyInstance) {
       const data = request.body as z.infer<typeof loginSchema>;
 
       const identifier = data.email || data.id_no;
-      const user = await queryOne<User>(
-        'SELECT * FROM users WHERE email = $1 OR id_no = $1',
+      const user = await queryOne<User & { state_name: string; state_slug: string }>(
+        `SELECT u.*, s.name as state_name, s.slug as state_slug 
+         FROM users u 
+         LEFT JOIN states s ON u.state_id = s.id 
+         WHERE u.email = $1 OR u.id_no = $1`,
         [identifier]
       );
 
@@ -282,14 +285,10 @@ export default async function authRoutes(fastify: FastifyInstance) {
 
       return reply.send(successResponse({
         user: {
-          id: user.id,
-          id_no: user.id_no,
-          full_name: user.full_name,
-          email: user.email,
-          role: user.role,
-          status: user.status,
-          referral_code: user.referral_code,
-          avatar_url: user.avatar_url,
+          ...user,
+          membership_status: (user.status as any) === 'membership_active' ? 'active' : ((user.status as any) === 'pending_admin_approval' ? 'pending' : 'inactive'),
+          membership_plan_type: user.membership_plan_type || 'standard_member',
+          membership_expires_at: user.membership_expires_at || null,
         },
         token,
       }, 'Login successful'));
@@ -442,15 +441,11 @@ export default async function authRoutes(fastify: FastifyInstance) {
         return reply.status(404).send(errorResponse('User not found'));
       }
 
-      // Get active membership if any
-      const membership = await queryOne(
-        'SELECT * FROM memberships WHERE user_id = $1 AND status = $2',
-        [user.id, 'active']
-      );
-
       return reply.send(successResponse({
         ...user,
-        membership: membership || null,
+        membership_status: (user.status as any) === 'membership_active' ? 'active' : ((user.status as any) === 'pending_admin_approval' ? 'pending' : 'inactive'),
+        membership_plan_type: user.membership_plan_type || 'standard_member',
+        membership_expires_at: user.membership_expires_at || null,
       }));
 
     } catch (error: any) {

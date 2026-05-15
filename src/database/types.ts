@@ -43,6 +43,8 @@ export interface User {
   last_login_at: string | null;
   login_attempts: number;
   locked_until: string | null;
+  membership_plan_type: MembershipPlanType | null;
+  membership_expires_at: string | null;
   created_at: string;
   updated_at: string;
 }

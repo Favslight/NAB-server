@@ -709,7 +709,7 @@ CREATE TABLE deal_ai_users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
     deal_ai_email VARCHAR(255) NOT NULL,
-    current_role VARCHAR(100) NOT NULL,
+    deal_role VARCHAR(100) NOT NULL,
     synced_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     last_role_sync_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     status deal_ai_sync_status DEFAULT 'active',
