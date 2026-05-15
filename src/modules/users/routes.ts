@@ -96,6 +96,8 @@ export default async function userRoutes(fastify: FastifyInstance) {
 
       return reply.send(successResponse({
         ...user,
+        membership_status: membership?.status || 'inactive',
+        membership_expires_at: membership?.expires_at || null,
         membership: membership || null,
         referral_stats: referralStats,
       }));

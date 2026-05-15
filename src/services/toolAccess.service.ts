@@ -1,50 +1,25 @@
-// Tool access control — maps membership plans to allowed tool slugs
-
-// Exact plan slugs stored in DB
-export const PLAN_SLUGS = {
-  AI_EXPLORER: 'ai_explorer',
-  AI_BUILDER: 'ai_builder',
-  AI_PRODUCT_FOUNDER: 'ai_product_founder',
-  STANDARD_MEMBER: 'standard_member',
-} as const;
-
-// Tool slugs accessible per plan
-export const PLAN_TOOL_ACCESS: Record<string, string[] | '*'> = {
-  'ai_explorer': [
-    'hyperrealistic-ai-images',
-  ],
-  'ai_builder': [
-    'hyperrealistic-ai-images',
-    'ai-videos',
-    'ai-voice-over',
-  ],
-  'ai_product_founder': '*', // all tools
-  'standard_member': [],     // no tools — legacy plan
+// Plan hierarchy levels for comparison
+export const PLAN_LEVELS: Record<string, number> = {
+  'standard_member': 0,
+  'ai_explorer': 1,
+  'ai_builder': 2,
+  'ai_product_founder': 3,
 };
 
 /**
- * Check whether a membership plan can access a specific tool slug
+ * Check whether a membership plan can access a tool requiring a certain plan level
  */
-export function canAccessTool(plan: string | null | undefined, toolSlug: string): boolean {
-  if (!plan) return false;
-  const access = PLAN_TOOL_ACCESS[plan];
-  if (!access) return false;
-  if (access === '*') return true;
-  return access.includes(toolSlug);
+export function canAccessTool(userPlan: string | null | undefined, requiredPlan: string): boolean {
+  if (!userPlan) return false;
+  
+  const userLevel = PLAN_LEVELS[userPlan] ?? 0;
+  const requiredLevel = PLAN_LEVELS[requiredPlan] ?? 0;
+  
+  return userLevel >= requiredLevel;
 }
 
 /**
- * Get the list of tool slugs a plan can access (or '*' for all)
- */
-export function getAccessibleSlugs(plan: string | null | undefined): string[] | '*' {
-  if (!plan) return [];
-  const access = PLAN_TOOL_ACCESS[plan];
-  if (!access) return [];
-  return access;
-}
-
-/**
- * Get plan display name from plan slug
+ * Get display name for a plan slug
  */
 export function getPlanDisplayName(plan: string): string {
   const names: Record<string, string> = {

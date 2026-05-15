@@ -1,5 +1,5 @@
 import { query, queryOne } from '../database/database';
-import { canAccessTool, getAccessibleSlugs } from './toolAccess.service';
+import { canAccessTool } from './toolAccess.service';
 
 export interface ToolRow {
   id: string;
@@ -47,32 +47,17 @@ export async function getAllTools(userPlan: string | null): Promise<ToolResponse
  * Fetch tools the user can actually launch
  */
 export async function getMyAccessTools(userPlan: string): Promise<ToolResponse[]> {
-  const accessible = getAccessibleSlugs(userPlan);
+  const allTools = await query<ToolRow>(
+    `SELECT t.*, tc.name as category_name
+     FROM tools t
+     LEFT JOIN tool_categories tc ON t.category = tc.slug
+     WHERE t.active = true
+     ORDER BY t.featured DESC, t.name ASC`
+  );
 
-  let tools: ToolRow[];
-  if (accessible === '*') {
-    tools = await query<ToolRow>(
-      `SELECT t.*, tc.name as category_name
-       FROM tools t
-       LEFT JOIN tool_categories tc ON t.category = tc.slug
-       WHERE t.active = true
-       ORDER BY t.featured DESC, t.name ASC`
-    ) || [];
-  } else if (accessible.length === 0) {
-    return [];
-  } else {
-    const placeholders = accessible.map((_, i) => `$${i + 1}`).join(', ');
-    tools = await query<ToolRow>(
-      `SELECT t.*, tc.name as category_name
-       FROM tools t
-       LEFT JOIN tool_categories tc ON t.category = tc.slug
-       WHERE t.active = true AND t.slug IN (${placeholders})
-       ORDER BY t.featured DESC, t.name ASC`,
-      accessible
-    ) || [];
-  }
-
-  return tools.map(t => formatTool(t, userPlan));
+  return (allTools || [])
+    .filter(t => canAccessTool(userPlan, t.required_plan))
+    .map(t => formatTool(t, userPlan));
 }
 
 /**
@@ -92,7 +77,7 @@ export async function getToolBySlug(slug: string): Promise<ToolRow | null> {
  * Format a DB row into the API response shape
  */
 export function formatTool(tool: ToolRow, userPlan: string | null): ToolResponse {
-  const locked = !canAccessTool(userPlan, tool.slug);
+  const locked = !canAccessTool(userPlan, tool.required_plan);
   return {
     id: tool.id,
     name: tool.name,

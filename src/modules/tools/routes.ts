@@ -131,7 +131,7 @@ export default async function toolRoutes(fastify: FastifyInstance) {
       }
 
       // 3. Check tool access
-      if (!canAccessTool(membership.plan_type, slug)) {
+      if (!canAccessTool(membership.plan_type, tool.required_plan)) {
         return reply.status(403).send(errorResponse(`Your current plan (${membership.plan_type}) does not include access to ${tool.name}. Please upgrade.`));
       }
 
