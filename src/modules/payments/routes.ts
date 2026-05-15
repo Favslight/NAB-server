@@ -58,8 +58,8 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
       const userId = request.user!.userId;
 
       // Get user details
-      const user = await queryOne<{ id: string; email: string; full_name: string }>(
-        'SELECT id, email, full_name FROM users WHERE id = $1',
+      const user = await queryOne<{ id: string; email: string; full_name: string; status: string; role: string }>(
+        'SELECT id, email, full_name, status, role FROM users WHERE id = $1',
         [userId]
       );
 
