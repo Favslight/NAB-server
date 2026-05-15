@@ -11,7 +11,7 @@ interface DealAiUserRow {
   id: string;
   user_id: string;
   deal_ai_email: string;
-  current_role: string;
+  deal_role: string;
   synced_at: string;
   last_role_sync_at: string;
   status: string;
@@ -40,16 +40,16 @@ export async function ensureUserSyncedToDealAi(
 
     // Record in our DB
     await query(
-      `INSERT INTO deal_ai_users (user_id, deal_ai_email, current_role, synced_at, last_role_sync_at, status)
+      `INSERT INTO deal_ai_users (user_id, deal_ai_email, deal_role, synced_at, last_role_sync_at, status)
        VALUES ($1, $2, $3, NOW(), NOW(), 'active')`,
       [userId, email, dealAiRole]
     );
-  } else if (existing.current_role !== dealAiRole) {
+  } else if (existing.deal_role !== dealAiRole) {
     // Role has changed — sync it
     await updateDealAiUserRole(existing.deal_ai_email, dealAiRole);
 
     await query(
-      'UPDATE deal_ai_users SET current_role = $1, last_role_sync_at = NOW() WHERE user_id = $2',
+      'UPDATE deal_ai_users SET deal_role = $1, last_role_sync_at = NOW() WHERE user_id = $2',
       [dealAiRole, userId]
     );
   }
