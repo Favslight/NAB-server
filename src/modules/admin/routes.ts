@@ -716,7 +716,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         if (!isFeeEnabled) {
           await query(
             `INSERT INTO memberships (user_id, plan_type, amount_paid, status, starts_at, expires_at)
-             VALUES ($1, 'standard_member', 0, 'active', $2, $3)`,
+             VALUES ($1, 'ai_explorer', 0, 'active', $2, $3)`,
             [id, new Date().toISOString(), new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString()]
           );
         }
