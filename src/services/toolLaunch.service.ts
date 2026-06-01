@@ -1,3 +1,5 @@
+
+// tool launch service
 import { query, queryOne } from '../database/database';
 import { config } from '../config';
 import {
@@ -34,14 +36,20 @@ export async function ensureUserSyncedToDealAi(
     [userId]
   );
 
-  if (!existing) {
+  if (!existing || existing.status === 'sync_failed') {
     // Create user on Deal.ai
     await createDealAiUser(email, fullName, dealAiRole);
 
-    // Record in our DB
+    // Record in our DB (UPSERT)
     await query(
       `INSERT INTO deal_ai_users (user_id, deal_ai_email, deal_role, synced_at, last_role_sync_at, status)
-       VALUES ($1, $2, $3, NOW(), NOW(), 'active')`,
+       VALUES ($1, $2, $3, NOW(), NOW(), 'active')
+       ON CONFLICT (user_id) DO UPDATE SET
+         deal_ai_email = $2,
+         deal_role = $3,
+         synced_at = NOW(),
+         last_role_sync_at = NOW(),
+         status = 'active'`,
       [userId, email, dealAiRole]
     );
   } else if (existing.deal_role !== dealAiRole) {

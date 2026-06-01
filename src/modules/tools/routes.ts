@@ -148,29 +148,7 @@ export default async function toolRoutes(fastify: FastifyInstance) {
         return reply.status(403).send(errorResponse(`Your current plan (${userPlan}) does not include access to ${tool.name}. Please upgrade.`));
       }
 
-      // 4. Fetch full user for Deal.ai sync
-      const fullUser = await queryOne<{ id: string; email: string; full_name: string }>(
-        'SELECT id, email, full_name FROM users WHERE id = $1',
-        [userId]
-      );
-
-      if (!fullUser || !fullUser.email) {
-        return reply.status(400).send(errorResponse('User email is required to launch tools'));
-      }
-
-      // 5. Ensure user is synced to Deal.ai (create or update role)
-      try {
-        await ensureUserSyncedToDealAi(userId, fullUser.email, fullUser.full_name, userPlan);
-      } catch (syncError: any) {
-        // Mark sync as failed — don't block the launch if Deal.ai is unreachable
-        request.log.error('Deal.ai sync failed for user ' + userId + ': ' + syncError.message);
-        await query(
-          "UPDATE deal_ai_users SET status = 'sync_failed' WHERE user_id = $1",
-          [userId]
-        ).catch(() => {}); // non-blocking
-      }
-
-      // 6. Log the launch
+      // 4. Log the launch
       await logToolLaunch(
         userId,
         tool.id,
@@ -178,7 +156,7 @@ export default async function toolRoutes(fastify: FastifyInstance) {
         request.headers['user-agent'] || null
       );
 
-      // 7. Return launch URL
+      // 5. Return launch URL
       return reply.send(successResponse({
         launchUrl: config.dealAi.launchUrl,
         tool: {

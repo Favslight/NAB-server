@@ -52,10 +52,28 @@ async function dealAiFetch(
  */
 export async function createDealAiUser(
   email: string,
-  name: string,
+  fullName: string,
   role: DealAiRole
 ): Promise<any> {
-  return dealAiFetch('POST', '/whitelabel/users', { email, name, role });
+  const names = fullName.trim().split(' ');
+  const firstName = names[0];
+  const lastName = names.length > 1 ? names.slice(1).join(' ') : '';
+
+  // Generate a secure 16-character random password for Deal.ai account creation
+  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()';
+  let password = '';
+  for (let i = 0; i < 16; i++) {
+    password += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+
+  return dealAiFetch('POST', '/whitelabel/users', {
+    firstName,
+    lastName,
+    password,
+    email,
+    sendInviteEmail: 'yes',
+    role,
+  });
 }
 
 /**
