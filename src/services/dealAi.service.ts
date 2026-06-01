@@ -3,14 +3,13 @@ import { config } from '../config';
 const BASE_URL = config.dealAi.baseUrl;
 const API_KEY = config.dealAi.apiKey;
 
-export type DealAiRole = 'Explorer Plan' | 'Builder Plan' | 'Product Founder Plan';
+export type DealAiRole = 'AI Explorer' | 'AI Builder' | 'AI Product Founder';
 
 // Map local membership plan → Deal.ai role
 export const PLAN_TO_DEAL_AI_ROLE: Record<string, DealAiRole> = {
-  'ai_explorer': 'Explorer Plan',
-  'ai_builder': 'Builder Plan',
-  'ai_product_founder': 'Product Founder Plan',
-  'standard_member': 'Explorer Plan', // fallback for legacy plan
+  'ai_explorer': 'AI Explorer',
+  'ai_builder': 'AI Builder',
+  'ai_product_founder': 'AI Product Founder'
 };
 
 async function dealAiFetch(
