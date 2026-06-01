@@ -103,12 +103,35 @@ export default async function toolRoutes(fastify: FastifyInstance) {
         [userId]
       );
 
-      if (!user || user.status !== 'membership_active') {
-        return reply.send(successResponse([], 'No active membership — no tools accessible'));
-      }
+      if (!user) {
+  return reply.send(
+    successResponse([], 'User not found')
+  );
+}
 
-      const tools = await getMyAccessTools(user.membership_plan_type || 'standard_member');
-      return reply.send(successResponse(tools));
+let userPlan: string;
+
+switch (user.status) {
+  case 'pending_verification':
+  case 'verified':
+    userPlan = 'ai_explorer';
+    break;
+
+  case 'membership_active':
+    userPlan = user.membership_plan_type || 'ai_builder';
+    break;
+
+  default:
+    return reply.send(
+      successResponse([], 'No tool access available')
+    );
+}
+
+const tools = await getMyAccessTools(userPlan);
+
+return reply.send(
+  successResponse(tools)
+);
 
     } catch (error: any) {
       request.log.error(error);
@@ -134,14 +157,31 @@ export default async function toolRoutes(fastify: FastifyInstance) {
         [userId]
       );
 
-      if (!user || user.status !== 'membership_active') {
-        return reply.status(403).send(errorResponse('No active membership. Please upgrade your plan to access AI tools.'));
-      }
+      if (!user) {
+  return reply.status(404).send(
+    errorResponse('User not found')
+  );
+}
 
-      let userPlan = user.membership_plan_type || 'ai_builder';
-      if (userPlan === 'ai_explorer' && user.status === 'membership_active') {
-        userPlan = 'ai_builder';
-      }
+let userPlan: string;
+
+switch (user.status) {
+  case 'pending_verification':
+  case 'verified':
+    userPlan = 'ai_explorer';
+    break;
+
+  case 'membership_active':
+    userPlan = user.membership_plan_type || 'ai_builder';
+    break;
+
+  default:
+    return reply.status(403).send(
+      errorResponse(
+        'Your account is not eligible to use AI tools yet.'
+      )
+    );
+}
 
       // 3. Check tool access
       if (!canAccessTool(userPlan, tool.required_plan)) {
