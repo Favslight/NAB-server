@@ -5,7 +5,7 @@ import { authenticateToken, requireAuth, requireSuperAdmin } from '../../middlew
 import { validateBody, validateQuery } from '../../middlewares/validation';
 import { successResponse, errorResponse, paginatedResponse } from '../../utils/response';
 import { config } from '../../config';
-import { canAccessTool } from '../../services/toolAccess.service';
+import { canAccessTool, getEffectiveToolPlan } from '../../services/toolAccess.service';
 import { getAllTools, getAllCategories, getToolBySlug, getMyAccessTools } from '../../services/tools.service';
 import { ensureUserSyncedToDealAi, logToolLaunch, getLaunchAnalytics } from '../../services/toolLaunch.service';
 
@@ -22,7 +22,7 @@ const createToolSchema = z.object({
   description: z.string().optional(),
   icon: z.string().optional(),
   category: z.string().optional(),
-  required_plan: z.enum(['ai_explorer', 'ai_builder', 'ai_product_founder', 'standard_member']),
+  required_plan: z.enum(['ai_explorer', 'ai_builder', 'ai_product_founder']),
   featured: z.boolean().default(false),
   active: z.boolean().default(true),
 });
@@ -32,7 +32,7 @@ const updateToolSchema = z.object({
   description: z.string().optional(),
   icon: z.string().optional(),
   category: z.string().optional(),
-  required_plan: z.enum(['ai_explorer', 'ai_builder', 'ai_product_founder', 'standard_member']).optional(),
+  required_plan: z.enum(['ai_explorer', 'ai_builder', 'ai_product_founder']).optional(),
   featured: z.boolean().optional(),
   active: z.boolean().optional(),
 });
@@ -53,14 +53,7 @@ export default async function toolRoutes(fastify: FastifyInstance) {
         [userId]
       );
 
-      let userPlan = user?.status === 'membership_active' 
-        ? (user.membership_plan_type || 'ai_builder') 
-        : (user?.status === 'verified' || user?.status === 'pending_verification' ? 'ai_explorer' : null);
-
-      // Override if they are active but stuck on explorer default
-      if (userPlan === 'ai_explorer' && user?.status === 'membership_active') {
-        userPlan = 'ai_builder';
-      }
+      const userPlan = getEffectiveToolPlan(user?.status, user?.membership_plan_type);
       const tools = await getAllTools(userPlan);
       return reply.send(successResponse(tools));
 
@@ -109,22 +102,11 @@ export default async function toolRoutes(fastify: FastifyInstance) {
   );
 }
 
-let userPlan: string;
-
-switch (user.status) {
-  case 'pending_verification':
-  case 'verified':
-    userPlan = 'ai_explorer';
-    break;
-
-  case 'membership_active':
-    userPlan = user.membership_plan_type || 'ai_builder';
-    break;
-
-  default:
-    return reply.send(
-      successResponse([], 'No tool access available')
-    );
+const userPlan = getEffectiveToolPlan(user.status, user.membership_plan_type);
+if (!userPlan) {
+  return reply.send(
+    successResponse([], 'No tool access available')
+  );
 }
 
 const tools = await getMyAccessTools(userPlan);
@@ -163,24 +145,13 @@ return reply.send(
   );
 }
 
-let userPlan: string;
-
-switch (user.status) {
-  case 'pending_verification':
-  case 'verified':
-    userPlan = 'ai_explorer';
-    break;
-
-  case 'membership_active':
-    userPlan = user.membership_plan_type || 'ai_builder';
-    break;
-
-  default:
-    return reply.status(403).send(
-      errorResponse(
-        'Your account is not eligible to use AI tools yet.'
-      )
-    );
+const userPlan = getEffectiveToolPlan(user.status, user.membership_plan_type);
+if (!userPlan) {
+  return reply.status(403).send(
+    errorResponse(
+      'Your account is not eligible to use AI tools yet.'
+    )
+  );
 }
 
       // 3. Check tool access

@@ -5,6 +5,7 @@ import { authenticateToken, requireAuth, requireSuperAdmin, requireStateAdmin } 
 import { validateBody, validateQuery } from '../../middlewares/validation';
 import { successResponse, errorResponse, paginatedResponse } from '../../utils/response';
 import { uploadImage } from '../../utils/cloudinary';
+import { getMembershipPlanForResponse } from '../../services/toolAccess.service';
 
 const updateProfileSchema = z.object({
   full_name: z.string().min(2).max(255).optional(),
@@ -91,9 +92,7 @@ export default async function userRoutes(fastify: FastifyInstance) {
       return reply.send(successResponse({
         ...user,
         membership_status: (user.status as any) === 'membership_active' ? 'active' : ((user.status as any) === 'pending_admin_approval' ? 'pending' : 'inactive'),
-        membership_plan_type: (user.membership_plan_type === 'ai_explorer' && (user.status as any) === 'membership_active') 
-          ? 'ai_builder' 
-          : (user.membership_plan_type || ((user.status as any) === 'membership_active' ? 'ai_builder' : 'ai_explorer')),
+        membership_plan_type: getMembershipPlanForResponse((user as any).status, (user as any).membership_plan_type),
         membership_expires_at: user.membership_expires_at || null,
         referral_stats: referralStats,
       }));
