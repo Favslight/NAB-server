@@ -47,7 +47,7 @@ export const config = {
   },
   
   app: {
-    frontendUrl: process.env.FRONTEND_URL || 'http://localhost:3001',
+    frontendUrl: process.env.FRONTEND_URL || 'https://aibuilders.ng',
     apiUrl: process.env.API_URL || 'http://localhost:3000',
   },
   

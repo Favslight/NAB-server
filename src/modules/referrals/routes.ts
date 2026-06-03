@@ -4,6 +4,8 @@ import { query, queryOne } from '../../database/database';
 import { authenticateToken, requireAuth, requireSuperAdmin } from '../../middlewares/auth';
 import { successResponse, errorResponse, paginatedResponse } from '../../utils/response';
 
+const REFERRAL_BASE_URL = 'https://aibuilders.ng';
+
 export default async function referralRoutes(fastify: FastifyInstance) {
   // GET /api/referrals/me - Get user's referral stats
   fastify.get('/me', { preHandler: [authenticateToken, requireAuth] }, async (request: FastifyRequest, reply: FastifyReply) => {
@@ -45,7 +47,7 @@ export default async function referralRoutes(fastify: FastifyInstance) {
 
       return reply.send(successResponse({
         referral_code: user.referral_code,
-        referral_link: `${process.env.FRONTEND_URL}/register?ref=${user.referral_code}`,
+        referral_link: `${REFERRAL_BASE_URL}/register?ref=${user.referral_code}`,
         stats,
         referrals,
       }));
