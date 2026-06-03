@@ -47,7 +47,7 @@ export default async function referralRoutes(fastify: FastifyInstance) {
 
       return reply.send(successResponse({
         referral_code: user.referral_code,
-        referral_link: `${REFERRAL_BASE_URL}/register?ref=${user.referral_code}`,
+        referral_link: `${REFERRAL_BASE_URL}?ref=${user.referral_code}`,
         stats,
         referrals,
       }));
