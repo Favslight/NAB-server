@@ -16,6 +16,10 @@ const paginationSchema = z.object({
   limit: z.string().regex(/^\d+$/).transform(Number).default('20'),
 });
 
+const adminToolsPaginationSchema = paginationSchema.extend({
+  limit: z.string().regex(/^\d+$/).transform(Number).default('100'),
+});
+
 const createToolSchema = z.object({
   name: z.string().min(1).max(255),
   slug: z.string().min(1).max(100).regex(/^[a-z0-9-]+$/),
@@ -294,7 +298,7 @@ if (!userPlan) {
 
   // ── GET /api/tools/admin/tools ─────────────────────────────────────────────
   // Admin: list all tools including inactive
-  fastify.get('/admin/tools', { preHandler: [authenticateToken, requireSuperAdmin, validateQuery(paginationSchema)] }, async (request: FastifyRequest, reply: FastifyReply) => {
+  fastify.get('/admin/tools', { preHandler: [authenticateToken, requireSuperAdmin, validateQuery(adminToolsPaginationSchema)] }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { page, limit } = request.query as any;
 
