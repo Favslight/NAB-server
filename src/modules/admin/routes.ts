@@ -945,7 +945,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           if (referrer) {
             // Update referral status to rewarded
             await query(
-              "UPDATE referrals SET status = 'rewarded', rewarded_at = $1 WHERE referred_user_id = $2",
+              "UPDATE referrals SET status = 'rewarded', qualified_at = $1, reward_amount = 500 WHERE referred_user_id = $2",
               [new Date().toISOString(), userId]
             );
 

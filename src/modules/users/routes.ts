@@ -82,10 +82,14 @@ export default async function userRoutes(fastify: FastifyInstance) {
       // Get referral stats
       const referralStats = await queryOne(
         `SELECT 
-          COUNT(*) FILTER (WHERE status = 'signed_up') as signed_up_count,
-          COUNT(*) FILTER (WHERE status = 'paid') as paid_count,
-          COUNT(*) FILTER (WHERE status = 'rewarded') as rewarded_count
-         FROM referrals WHERE referrer_user_id = $1`,
+          COUNT(r.*)::int as total_count,
+          COUNT(r.*) FILTER (WHERE r.status = 'signed_up')::int as signed_up_count,
+          COUNT(r.*) FILTER (WHERE r.status = 'paid')::int as paid_count,
+          COUNT(r.*) FILTER (WHERE r.status = 'rewarded')::int as rewarded_count,
+          COUNT(r.*) FILTER (WHERE u.status = 'membership_active')::int as active_count
+         FROM referrals r
+         LEFT JOIN users u ON u.id = r.referred_user_id
+         WHERE r.referrer_user_id = $1`,
         [user.id]
       );
 

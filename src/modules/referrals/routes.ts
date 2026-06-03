@@ -25,19 +25,31 @@ export default async function referralRoutes(fastify: FastifyInstance) {
       // Get referral stats
       const stats = await queryOne(
         `SELECT 
-          COUNT(*) FILTER (WHERE status = 'clicked')::int as clicked,
-          COUNT(*) FILTER (WHERE status = 'signed_up')::int as signed_up,
-          COUNT(*) FILTER (WHERE status = 'paid')::int as paid,
-          COUNT(*) FILTER (WHERE status = 'rewarded')::int as rewarded,
-          COALESCE(SUM(reward_amount), 0) as total_rewards
-         FROM referrals 
-         WHERE referrer_user_id = $1`,
+          COUNT(r.*)::int as total_count,
+          COUNT(r.*) FILTER (WHERE r.status = 'clicked')::int as clicked,
+          COUNT(r.*) FILTER (WHERE r.status = 'clicked')::int as clicked_count,
+          COUNT(r.*) FILTER (WHERE r.status = 'signed_up')::int as signed_up,
+          COUNT(r.*) FILTER (WHERE r.status = 'signed_up')::int as signed_up_count,
+          COUNT(r.*) FILTER (WHERE r.status = 'paid')::int as paid,
+          COUNT(r.*) FILTER (WHERE r.status = 'paid')::int as paid_count,
+          COUNT(r.*) FILTER (WHERE r.status = 'rewarded')::int as rewarded,
+          COUNT(r.*) FILTER (WHERE r.status = 'rewarded')::int as rewarded_count,
+          COUNT(r.*) FILTER (WHERE u.status = 'membership_active')::int as active_count,
+          COALESCE(SUM(r.reward_amount), 0) as total_rewards
+         FROM referrals r
+         LEFT JOIN users u ON u.id = r.referred_user_id
+         WHERE r.referrer_user_id = $1`,
         [userId]
       );
 
       // Get referral list with details
       const referrals = await query(
-        `SELECT r.*, u.full_name as referred_name, u.created_at as signup_date
+        `SELECT 
+          r.*,
+          u.full_name as referred_name,
+          u.status as referred_status,
+          u.membership_plan_type as referred_membership_plan_type,
+          u.created_at as signup_date
          FROM referrals r
          JOIN users u ON r.referred_user_id = u.id
          WHERE r.referrer_user_id = $1
@@ -107,9 +119,9 @@ export default async function referralRoutes(fastify: FastifyInstance) {
 
       // Track click
       await query(
-        `INSERT INTO referral_clicks (referrer_user_id, ip_address, user_agent, clicked_at)
+        `INSERT INTO referral_clicks (referral_code, ip_address, user_agent, clicked_at)
          VALUES ($1, $2, $3, $4)`,
-        [referrer.id, ip_address || null, user_agent || null, new Date().toISOString()]
+        [referral_code, ip_address || null, user_agent || null, new Date().toISOString()]
       );
 
       return reply.send(successResponse(null, 'Click tracked'));
