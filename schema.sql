@@ -639,7 +639,7 @@ SELECT id, 1 FROM states;
 
 -- Insert default system settings
 INSERT INTO system_settings (key, value, value_type, description) VALUES
-('membership_price_naira', '5000', 'number', 'Standard membership price in Naira'),
+('membership_price_naira', '30000', 'number', 'Standard membership price in Naira'),
 ('enable_membership_fee', 'true', 'boolean', 'Enable paid membership signup. When false, users join as members immediately without payment'),
 ('referral_reward_naira', '500', 'number', 'Referral reward amount in Naira'),
 ('enable_guest_login', 'true', 'boolean', 'Allow guest login without registration'),
@@ -786,4 +786,3 @@ COMMENT ON TABLE tool_categories IS 'Categories for AI Launchpad tools';
 COMMENT ON TABLE tools IS 'AI Launchpad tools — access controlled by membership plan';
 COMMENT ON TABLE deal_ai_users IS 'Tracks users synced to Deal.ai whitelabel system';
 COMMENT ON TABLE tool_launch_logs IS 'Audit log of every tool launch by a user';
-

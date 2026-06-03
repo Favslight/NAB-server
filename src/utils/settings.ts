@@ -44,7 +44,7 @@ export async function isMembershipFeeEnabled(): Promise<boolean> {
 }
 
 export async function getMembershipPrice(): Promise<number> {
-  return getNumberSetting('membership_price_naira', 5000);
+  return getNumberSetting('membership_price_naira', 30000);
 }
 
 export async function getReferralReward(): Promise<number> {

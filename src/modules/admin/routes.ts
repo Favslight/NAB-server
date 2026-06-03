@@ -52,6 +52,17 @@ const paymentReviewSchema = z.object({
   notes: z.string().optional(),
 });
 
+type PaidMembershipPlan = 'ai_builder' | 'ai_product_founder';
+
+const MEMBERSHIP_AMOUNTS: Record<PaidMembershipPlan, number> = {
+  ai_builder: 30000,
+  ai_product_founder: 250000,
+};
+
+function normalizePaidMembershipType(value: unknown): PaidMembershipPlan {
+  return value === 'ai_product_founder' ? 'ai_product_founder' : 'ai_builder';
+}
+
 export default async function adminRoutes(fastify: FastifyInstance) {
   // GET /api/admin/dashboard - Admin dashboard stats
   fastify.get('/dashboard', { preHandler: [authenticateToken, requireStateAdmin] }, async (request: FastifyRequest, reply: FastifyReply) => {
@@ -824,7 +835,20 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         countParams
       );
 
-      return reply.send(paginatedResponse(payments || [], countResult?.count || 0, page, limit));
+      const normalizedPayments = (payments || []).map((payment: any) => {
+        if (payment.type !== 'membership') return payment;
+
+        const payload = payment.provider_payload_json || {};
+        const membershipType = normalizePaidMembershipType(payload.membership_type);
+
+        return {
+          ...payment,
+          membership_type: membershipType,
+          amount: MEMBERSHIP_AMOUNTS[membershipType],
+        };
+      });
+
+      return reply.send(paginatedResponse(normalizedPayments, countResult?.count || 0, page, limit));
 
     } catch (error: any) {
       request.log.error(error);
@@ -855,16 +879,24 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       }
 
       const payload = transactionData.provider_payload_json || {};
-      const membershipType = payload.membership_type || 'ai_builder';
+      const membershipType = normalizePaidMembershipType(payload.membership_type);
       const referralCode = payload.referral_code;
       const userId = transactionData.user_id;
-      const amount = transactionData.amount;
+      const amount = MEMBERSHIP_AMOUNTS[membershipType];
 
       if (action === 'approve') {
         // Approve payment
         await query(
-          'UPDATE transactions SET status = $1, paid_at = $2, provider_payload_json = jsonb_set(COALESCE(provider_payload_json::jsonb, \'{}\'), \'{admin_notes}\', $3) WHERE id = $4',
-          ['success', new Date().toISOString(), JSON.stringify(notes || ''), id]
+          `UPDATE transactions
+           SET status = $1,
+               paid_at = $2,
+               amount = $3,
+               provider_payload_json = jsonb_set(
+                 jsonb_set(COALESCE(provider_payload_json::jsonb, '{}'), '{admin_notes}', $4),
+                 '{membership_type}', $5
+               )
+           WHERE id = $6`,
+          ['success', new Date().toISOString(), amount, JSON.stringify(notes || ''), JSON.stringify(membershipType), id]
         );
 
         // All plans are now lifetime (No expiration)

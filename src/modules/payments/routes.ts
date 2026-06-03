@@ -5,12 +5,26 @@ import { authenticateToken, requireAuth, requireMember } from '../../middlewares
 import { validateBody } from '../../middlewares/validation';
 import { successResponse, errorResponse } from '../../utils/response';
 import { config } from '../../config';
-import { getMembershipPrice } from '../../utils/settings';
 
 const initiatePaymentSchema = z.object({
   membership_type: z.enum(['basic', 'premium', 'lifetime', 'standard_member', 'ai_explorer', 'ai_builder', 'ai_product_founder']),
   referral_code: z.string().nullable().optional(),
 });
+
+type PaidMembershipPlan = 'ai_builder' | 'ai_product_founder';
+
+const MEMBERSHIP_AMOUNTS: Record<PaidMembershipPlan, number> = {
+  ai_builder: 30000,
+  ai_product_founder: 250000,
+};
+
+function normalizePaidMembershipType(value: unknown): PaidMembershipPlan {
+  return value === 'ai_product_founder' ? 'ai_product_founder' : 'ai_builder';
+}
+
+function getMembershipAmount(type: PaidMembershipPlan): number {
+  return MEMBERSHIP_AMOUNTS[type];
+}
 
 const confirmManualSchema = z.object({
   invoice_number: z.string(),
@@ -27,11 +41,10 @@ function verifyPaystackSignature(payload: string, signature: string, secret: str
 // Get membership amount based on type
 function getMembershipAmount(type: string): number {
   const amounts: Record<string, number> = {
-    basic: 5000,
-    premium: 15000,
-    lifetime: 50000,
+    ai_builder: 30000,
+    ai_product_founder: 250000,
   };
-  return amounts[type] || 5000;
+  return amounts[type] || 30000;
 }
 */
 
@@ -40,9 +53,15 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
   // GET /api/payments/details - Get payment details
   fastify.get('/details', { preHandler: [authenticateToken, requireAuth] }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
-      const amount = await getMembershipPrice();
+      const { membership_type = 'ai_builder' } = request.query as { membership_type?: string };
+      const parsedMembershipType = initiatePaymentSchema.shape.membership_type.safeParse(membership_type);
+      const selectedMembershipType = normalizePaidMembershipType(parsedMembershipType.success ? parsedMembershipType.data : 'ai_builder');
+      const amount = getMembershipAmount(selectedMembershipType);
+
       return reply.send(successResponse({
+        membership_type: selectedMembershipType,
         amount,
+        plans: MEMBERSHIP_AMOUNTS,
         bank: config.bank
       }, 'Payment details retrieved'));
     } catch (error: any) {
@@ -55,6 +74,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
   fastify.post('/initiate', { preHandler: [authenticateToken, requireAuth, validateBody(initiatePaymentSchema)] }, async (request: FastifyRequest, reply: FastifyReply) => {
     try {
       const { membership_type, referral_code } = request.body as z.infer<typeof initiatePaymentSchema>;
+      const selectedMembershipType = normalizePaidMembershipType(membership_type);
       const userId = request.user!.userId;
 
       // Get user details
@@ -77,8 +97,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
          // Maybe they are active but record is missing? We'll allow them to proceed to fix their state.
       }
 
-      // Automatically read amount from settings
-      const amount = await getMembershipPrice();
+      const amount = getMembershipAmount(selectedMembershipType);
       
       // Generate invoice number
       const invoiceNumber = `INV-${Date.now()}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
@@ -88,7 +107,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
       await query(
         `INSERT INTO transactions (user_id, reference, amount, currency, status, provider_payload_json, provider, type)
          VALUES ($1, $2, $3, 'NGN', 'pending', $4, 'manual', 'membership')`,
-        [userId, invoiceNumber, amount, JSON.stringify({ membership_type, referral_code: referral_code || null, is_manual_transfer: true })]
+        [userId, invoiceNumber, amount, JSON.stringify({ membership_type: selectedMembershipType, referral_code: referral_code || null, is_manual_transfer: true })]
       );
 
       /*
@@ -127,6 +146,7 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
 
       return reply.send(successResponse({
         reference: invoiceNumber,
+        membership_type: selectedMembershipType,
         amount,
         bank: config.bank
       }, 'Invoice generated successfully'));
@@ -204,7 +224,20 @@ export default async function paymentRoutes(fastify: FastifyInstance) {
         [userId]
       );
 
-      return reply.send(successResponse(transactions));
+      const normalizedTransactions = (transactions || []).map((tx: any) => {
+        if (tx.type !== 'membership') return tx;
+
+        const payload = tx.provider_payload_json || {};
+        const membershipType = normalizePaidMembershipType(payload.membership_type);
+
+        return {
+          ...tx,
+          membership_type: membershipType,
+          amount: getMembershipAmount(membershipType),
+        };
+      });
+
+      return reply.send(successResponse(normalizedTransactions));
 
     } catch (error: any) {
       request.log.error(error);

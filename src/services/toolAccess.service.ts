@@ -30,7 +30,7 @@ export function getEffectiveToolPlan(
       return 'ai_explorer';
 
     case 'membership_active':
-      return normalizeUserPlan(membershipPlan) || 'ai_builder';
+      return membershipPlan === 'ai_product_founder' ? 'ai_product_founder' : 'ai_builder';
 
     default:
       return null;
@@ -42,7 +42,7 @@ export function getMembershipPlanForResponse(
   membershipPlan: string | null | undefined
 ): ToolAccessPlan {
   if (status === 'membership_active') {
-    return normalizeUserPlan(membershipPlan) || 'ai_builder';
+    return membershipPlan === 'ai_product_founder' ? 'ai_product_founder' : 'ai_builder';
   }
 
   return normalizeUserPlan(membershipPlan) || 'ai_explorer';
