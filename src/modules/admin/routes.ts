@@ -6,8 +6,7 @@ import { authenticateToken, requireSuperAdmin, requireStateAdmin } from '../../m
 import { validateBody, validateQuery } from '../../middlewares/validation';
 import { successResponse, paginatedResponse, errorResponse } from '../../utils/response';
 import { sendEmail } from '../../utils/email';
-import { ensureUserSyncedToDealAi } from '../../services/toolLaunch.service';
-import { PLAN_TO_DEAL_AI_ROLE } from '../../services/dealAi.service';
+import { ensureUserSyncedToDealAi, markDealAiSyncFailed } from '../../services/toolLaunch.service';
 
 // Helper to build state filter for state admins
 function getStateFilter(request: FastifyRequest): { clause: string; param: string | null } {
@@ -696,31 +695,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           );
         } catch (error) {
           request.log.error(error);
-          await query(
-            `
-            INSERT INTO deal_ai_users (
-              user_id,
-              deal_ai_email,
-              deal_role,
-              status
-            )
-            VALUES (
-              $1,
-              $2,
-              $3,
-              'sync_failed'
-            )
-            ON CONFLICT (user_id)
-            DO UPDATE SET
-              status = 'sync_failed',
-              last_role_sync_at = NOW()
-            `,
-            [
-              user.id,
-              user.email || '',
-              'Explorer Plan'
-            ]
-          );
+          await markDealAiSyncFailed(user.id, user.email || '', 'ai_explorer');
         }
 
         // Create membership record if free
@@ -940,31 +915,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           );
         } catch (syncError: any) {
           request.log.error('Deal.ai sync failed during payment review for user ' + userId + ': ' + syncError.message);
-          await query(
-            `
-            INSERT INTO deal_ai_users (
-                user_id,
-                deal_ai_email,
-                deal_role,
-                status
-            )
-            VALUES (
-                $1,
-                $2,
-                $3,
-                'sync_failed'
-            )
-            ON CONFLICT (user_id)
-            DO UPDATE SET
-                status = 'sync_failed',
-                last_role_sync_at = NOW()
-            `,
-            [
-              userId,
-              transactionData.user_email || '',
-              PLAN_TO_DEAL_AI_ROLE[membershipType] || 'Explorer Plan'
-            ]
-          ).catch(() => {});
+          await markDealAiSyncFailed(userId, transactionData.user_email || '', membershipType).catch(() => {});
         }
 
         // Handle referral reward if applicable

@@ -7,7 +7,7 @@ import { successResponse, errorResponse, paginatedResponse } from '../../utils/r
 import { config } from '../../config';
 import { canAccessTool, getEffectiveToolPlan } from '../../services/toolAccess.service';
 import { getAllTools, getAllCategories, getToolBySlug, getMyAccessTools } from '../../services/tools.service';
-import { ensureUserSyncedToDealAi, logToolLaunch, getLaunchAnalytics } from '../../services/toolLaunch.service';
+import { ensureUserSyncedToDealAi, markDealAiSyncFailed, logToolLaunch, getLaunchAnalytics } from '../../services/toolLaunch.service';
 
 // ── Schemas ──────────────────────────────────────────────────────────────────
 
@@ -52,8 +52,8 @@ export default async function toolRoutes(fastify: FastifyInstance) {
       const userId = request.user!.userId;
 
       // Fetch user's active membership plan from users table
-      const user = await queryOne<{ status: string, membership_plan_type: string }>(
-        "SELECT status, membership_plan_type FROM users WHERE id = $1",
+      const user = await queryOne<{ email: string; full_name: string; status: string; membership_plan_type: string }>(
+        "SELECT email, full_name, status, membership_plan_type FROM users WHERE id = $1",
         [userId]
       );
 
@@ -95,8 +95,8 @@ export default async function toolRoutes(fastify: FastifyInstance) {
     try {
       const userId = request.user!.userId;
 
-      const user = await queryOne<{ status: string, membership_plan_type: string }>(
-        "SELECT status, membership_plan_type FROM users WHERE id = $1",
+      const user = await queryOne<{ email: string; full_name: string; status: string; membership_plan_type: string }>(
+        "SELECT email, full_name, status, membership_plan_type FROM users WHERE id = $1",
         [userId]
       );
 
@@ -138,32 +138,50 @@ return reply.send(
       }
 
       // 2. Fetch user's active membership from users table
-      const user = await queryOne<{ status: string, membership_plan_type: string }>(
-        "SELECT status, membership_plan_type FROM users WHERE id = $1",
+      const user = await queryOne<{ email: string; full_name: string; status: string; membership_plan_type: string }>(
+        "SELECT email, full_name, status, membership_plan_type FROM users WHERE id = $1",
         [userId]
       );
 
       if (!user) {
-  return reply.status(404).send(
-    errorResponse('User not found')
-  );
-}
+        return reply.status(404).send(
+          errorResponse('User not found')
+        );
+      }
 
-const userPlan = getEffectiveToolPlan(user.status, user.membership_plan_type);
-if (!userPlan) {
-  return reply.status(403).send(
-    errorResponse(
-      'Your account is not eligible to use AI tools yet.'
-    )
-  );
-}
+      const userPlan = getEffectiveToolPlan(user.status, user.membership_plan_type);
+      if (!userPlan) {
+        return reply.status(403).send(
+          errorResponse(
+            'Your account is not eligible to use AI tools yet.'
+          )
+        );
+      }
 
       // 3. Check tool access
       if (!canAccessTool(userPlan, tool.required_plan)) {
         return reply.status(403).send(errorResponse(`Your current plan (${userPlan}) does not include access to ${tool.name}. Please upgrade.`));
       }
 
-      // 4. Log the launch
+      // 4. Sync Deal.ai before launch so the subdomain sees the same tier as NAB.
+      try {
+        await ensureUserSyncedToDealAi(
+          userId,
+          user.email || '',
+          user.full_name,
+          userPlan
+        );
+      } catch (syncError: any) {
+        request.log.error('Deal.ai sync failed during tool launch for user ' + userId + ': ' + syncError.message);
+        await markDealAiSyncFailed(userId, user.email || '', userPlan).catch(() => {});
+
+        return reply.status(502).send(errorResponse(
+          'Your membership is active, but Deal.ai has not updated your tool access yet. Please try again in a moment.',
+          syncError.message
+        ));
+      }
+
+      // 5. Log the launch
       await logToolLaunch(
         userId,
         tool.id,
@@ -171,7 +189,7 @@ if (!userPlan) {
         request.headers['user-agent'] || null
       );
 
-      // 5. Return launch URL
+      // 6. Return launch URL
       return reply.send(successResponse({
         launchUrl: config.dealAi.launchUrl,
         tool: {

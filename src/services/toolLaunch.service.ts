@@ -1,7 +1,5 @@
-
 // tool launch service
 import { query, queryOne } from '../database/database';
-import { config } from '../config';
 import {
   createDealAiUser,
   updateDealAiUserRole,
@@ -29,18 +27,8 @@ export async function ensureUserSyncedToDealAi(
   fullName: string,
   membershipPlan: string
 ): Promise<void> {
-  const dealAiRole: DealAiRole = PLAN_TO_DEAL_AI_ROLE[membershipPlan] || 'Explorer Plan';
-
-  const existing = await queryOne<DealAiUserRow>(
-    'SELECT * FROM deal_ai_users WHERE user_id = $1',
-    [userId]
-  );
-
-  if (!existing || existing.status === 'sync_failed') {
-    // Create user on Deal.ai
-    await createDealAiUser(email, fullName, dealAiRole);
-
-    // Record in our DB (UPSERT)
+  const dealAiRole: DealAiRole = PLAN_TO_DEAL_AI_ROLE[membershipPlan] || 'AI Explorer';
+  const markSynced = async (dealAiEmail: string) => {
     await query(
       `INSERT INTO deal_ai_users (user_id, deal_ai_email, deal_role, synced_at, last_role_sync_at, status)
        VALUES ($1, $2, $3, NOW(), NOW(), 'active')
@@ -50,17 +38,58 @@ export async function ensureUserSyncedToDealAi(
          synced_at = NOW(),
          last_role_sync_at = NOW(),
          status = 'active'`,
-      [userId, email, dealAiRole]
+      [userId, dealAiEmail, dealAiRole]
     );
-  } else if (existing.deal_role !== dealAiRole) {
-    // Role has changed — sync it
-    await updateDealAiUserRole(existing.deal_ai_email, dealAiRole);
+  };
 
-    await query(
-      'UPDATE deal_ai_users SET deal_role = $1, last_role_sync_at = NOW() WHERE user_id = $2',
-      [dealAiRole, userId]
-    );
+  const existing = await queryOne<DealAiUserRow>(
+    'SELECT * FROM deal_ai_users WHERE user_id = $1',
+    [userId]
+  );
+
+  if (!existing) {
+    await createDealAiUser(email, fullName, dealAiRole);
+    await markSynced(email);
+    return;
   }
+
+  if (existing.status === 'active' && existing.deal_role === dealAiRole && existing.deal_ai_email === email) {
+    return;
+  }
+
+  const dealAiEmail = existing.deal_ai_email || email;
+
+  try {
+    await updateDealAiUserRole(dealAiEmail, dealAiRole);
+    await markSynced(dealAiEmail);
+  } catch (error: any) {
+    const message = error?.message || '';
+    if (message.includes('401') || message.includes('403')) {
+      throw error;
+    }
+
+    await createDealAiUser(email, fullName, dealAiRole);
+    await markSynced(email);
+  }
+}
+
+export async function markDealAiSyncFailed(
+  userId: string,
+  email: string,
+  membershipPlan: string
+): Promise<void> {
+  const dealAiRole: DealAiRole = PLAN_TO_DEAL_AI_ROLE[membershipPlan] || 'AI Explorer';
+
+  await query(
+    `INSERT INTO deal_ai_users (user_id, deal_ai_email, deal_role, status, last_role_sync_at)
+     VALUES ($1, $2, $3, 'sync_failed', NOW())
+     ON CONFLICT (user_id) DO UPDATE SET
+       deal_ai_email = $2,
+       deal_role = $3,
+       status = 'sync_failed',
+       last_role_sync_at = NOW()`,
+    [userId, email, dealAiRole]
+  );
 }
 
 /**
